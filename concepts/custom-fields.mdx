@@ -1,0 +1,189 @@
+---
+title: "Custom Fields"
+description: "Reading and writing tenant-defined profile fields, and discovering what exists"
+---
+
+Tenants extend user profiles with custom fields. Because the set is tenant-specific, these are not enumerated in the API specification — you discover them at runtime and address them by key.
+
+## Two key formats
+
+A custom field is addressed either by a **suffixed name** or by a **UUID**:
+
+| Format | Example | Notes |
+|---|---|---|
+| `*__c` suffix | `department__c`, `city__c`, `office_loc__c` | The readable form, used throughout the audience and people APIs |
+| UUID | `4ba58d96-9ac2-4820-88ef-28aa4555500d` | Accepted on user create/update, matched by pattern |
+
+On `POST /b2b/identity/users` and the user update endpoints, both patterns are accepted as dynamic property keys — the schema declares them as regex patterns (`^.*__c$` and a UUID pattern) rather than named properties.
+
+```json
+{
+  "firstName": "Jhon",
+  "lastName": "Smith",
+  "email": "jhon.smith@example.com",
+  "department__c": "Engineering",
+  "city__c": "Chandigarh"
+}
+```
+
+## Discovering what exists
+
+Do not hard-code a tenant's custom fields. The **User API** exposes three discovery endpoints:
+
+| Endpoint | Returns |
+|---|---|
+| `GET /identity/people-attributes` | Every profile attribute — standard and custom — with type and capability flags |
+| `GET /identity/people-attributes/{name}/values` | Distinct values **observed in data** for a filterable attribute |
+| `GET /identity/people-attributes/{name}/allowedValues` | **Configured** allowed values, for picklist / multi-select / enum fields |
+
+```bash
+curl -X GET 'https://platform.app.simpplr.com/v1/identity/people-attributes?isFilterable=true' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+```json
+{
+  "status": "success",
+  "message": "People attributes fetched successfully",
+  "result": {
+    "items": [
+      {
+        "name": "department",
+        "type": "string",
+        "isMultiValued": false,
+        "isFilterable": true,
+        "isEditable": true,
+        "isDisplayable": true
+      }
+    ]
+  }
+}
+```
+
+Attribute `type` is one of `string`, `text`, `enum`, `date`, `email`, `phone`, `url`, `ref`.
+
+The B2B API has the metadata endpoint (`GET /b2b/identity/people-attributes`) and both value endpoints as well, so a provisioning integration can validate against tenant configuration before writing.
+
+### Observed values vs configured values
+
+These two endpoints answer different questions, and picking the wrong one produces subtly wrong behavior:
+
+| | `/values` | `/allowedValues` |
+|---|---|---|
+| Source | Distinct values actually present in user data | Tenant field configuration (`tenant_fields.options`) |
+| Use for | Populating a filter UI that should only offer values that will match something | Validating input before a write, or offering the full legal set |
+| Works on | Any **filterable** attribute | Only picklist / multi-select / enum-style fields |
+| On a non-qualifying field | — | Returns a client error (invalid operation) |
+
+Both are paginated (`pageSize` up to 500, `nextPageToken`) and both accept `searchTerm` for substring filtering.
+
+## Multi-value fields
+
+Multi-select custom fields have **two accepted write forms** and a read form that depends on a query parameter:
+
+**Writing** — either an array or a semicolon-separated string:
+
+```json
+{ "skills__c": ["Java", "Python"] }
+```
+
+```json
+{ "skills__c": "Java;Python" }
+```
+
+**Reading** — controlled by `parseCustomFields`:
+
+| `parseCustomFields` | Multi-select comes back as |
+|---|---|
+| `true` (and custom field types enabled) | An array of strings |
+| `false` or omitted (the default) | One string with `;` separators |
+
+```bash
+curl -X GET 'https://platform.app.simpplr.com/v1/b2b/identity/users/{userId}?parseCustomFields=true' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+<Warning>
+  `parseCustomFields` defaults to `false`, so by default you receive `"Java;Python"` rather than `["Java","Python"]`. A client that assumes arrays will silently treat the whole thing as a single value. Set it explicitly and handle both shapes.
+</Warning>
+
+## Date custom fields
+
+Date-typed custom fields are written as `YYYY-MM-DD` strings — not full ISO 8601 timestamps:
+
+```json
+{ "certification_expiry__c": "2026-03-31" }
+```
+
+This differs from the platform's standard timestamp convention. See [Platform Conventions](/concepts/conventions#timestamps).
+
+## Filtering by custom field
+
+**People search** (`POST /identity/people/list`) takes custom fields as top-level array-valued keys, alongside standard fields:
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/identity/people/list' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "pageSize": 10,
+    "department": ["Marketing"],
+    "team__c": ["Branding Brainiacs", "Ad-Vengers"]
+  }'
+```
+
+Values within one key are OR-ed; separate keys are AND-ed. So the example finds people in Marketing who are on **either** of those two teams.
+
+**Audiences** reference custom fields as the `attribute` in a rule condition:
+
+```json
+{
+  "values": [{ "value": "udaipur" }],
+  "attribute": "city__c",
+  "operator": "CONTAINS",
+  "fieldType": "regular"
+}
+```
+
+See [Audiences & ABAC](/concepts/audiences-and-abac) for the full rule grammar.
+
+**Recognition** accepts a `customField` array of string values on `POST /recognition/list`.
+
+## Validation failures
+
+Referencing a field that does not exist in the tenant is rejected, and audience creation is specific about it:
+
+```json
+{
+  "message": "The input provided is invalid.",
+  "errors": [
+    {
+      "message": "Invalid Input",
+      "details": {
+        "invalidAttributes": ["testing1234__c"],
+        "invalidOperators": [],
+        "invalidValues": {}
+      }
+    }
+  ]
+}
+```
+
+That structured `details` object tells you precisely which attribute, operator, or value was rejected — worth surfacing rather than collapsing into a generic message. See [Errors](/concepts/errors#the-400-shapes).
+
+## Recommended approach
+
+<Steps>
+  <Step title="Discover once per run, not per record">
+    Call `GET /identity/people-attributes` at the start of a sync and cache the result. Attribute configuration changes rarely; per-record lookups are wasted calls.
+  </Step>
+  <Step title="Validate against allowed values before writing">
+    For picklist-style fields, check `/allowedValues` rather than discovering invalid input from a `400` mid-batch.
+  </Step>
+  <Step title="Set parseCustomFields explicitly on reads">
+    Otherwise multi-select values arrive semicolon-joined and are easy to mis-handle.
+  </Step>
+  <Step title="Map upstream fields to Simpplr keys in configuration">
+    Keep the mapping between your source system's fields and `*__c` keys as data, not code — tenants add fields without warning.
+  </Step>
+</Steps>

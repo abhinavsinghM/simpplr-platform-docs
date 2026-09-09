@@ -1,0 +1,131 @@
+---
+title: "Pagination"
+description: "Token-based paging, the parameter names each endpoint family uses, and how to get totals"
+---
+
+Paging is **cursor/token based** everywhere: you request a page size, and the response hands back an opaque token for the next page. There is no page-number addressing and no stable offset.
+
+## The basic loop
+
+```bash
+# First page — no token
+curl -X GET 'https://platform.app.simpplr.com/v1/b2b/identity/users?pageSize=50' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+```json
+{
+  "result": {
+    "items": [ ],
+    "nextPageToken": "50"
+  }
+}
+```
+
+```bash
+# Subsequent pages — pass the token back
+curl -X GET 'https://platform.app.simpplr.com/v1/b2b/identity/users?pageSize=50&pageToken=50' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+**Stop when the response omits the next-page token.** Do not stop on a short page — a full-looking page can still be the last one, and a short page is not a reliable end-of-list signal.
+
+<Warning>
+  Treat the token as opaque. Some endpoints currently return values that look like numeric offsets and others return longer strings, but the type and meaning are not part of the contract — pass back exactly what you received and never construct one yourself.
+</Warning>
+
+## The parameter names vary by family
+
+This is the main thing to get right, because there is no single platform-wide spelling. Both of these pairs are in active use:
+
+| Page size | Page cursor | Where |
+|---|---|---|
+| `pageSize` | `pageToken` | Users, audiences, audience members, people, tasks, task fields, recognition |
+| `size` | `nextPageToken` | Sites, content, files, feed, comments, reactions, site categories, page categories, topics, alerts, notifications |
+
+Some endpoints accept **both spellings as aliases** — the Task endpoints document `size` as an alias for `pageSize`, and `nextPageToken` as an alias for `pageToken`. Others accept only one. The API reference for each endpoint is authoritative.
+
+<Note>
+  A handful of endpoints diverge further. Notably, `GET /rfeed/feeds` and `GET /rfeed/feeds/{feedId}/comments` mark **both `size` and `nextPageToken` as required**, and expect an empty string `""` as the initial token rather than omitting it. `GET /video/search` uses `pageSize` with a numeric `offset` instead of a token.
+</Note>
+
+### Feed's first-page quirk
+
+```bash
+# First page of the home feed — note the empty-string token
+curl -X GET 'https://platform.app.simpplr.com/v1/rfeed/feeds?size=16&nextPageToken=' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+Omitting `nextPageToken` entirely on these endpoints is a validation error (`nextPageToken is required`), which is a confusing first failure if you assumed the usual "omit on first page" convention.
+
+## Getting a total count
+
+Totals are **opt-in**, because computing them costs more than returning a page:
+
+| Parameter | Endpoints | Returns |
+|---|---|---|
+| `includeTotal=true` | Users, audiences, audience members | `result.total` |
+| `includeCount=true` | Tasks, task assignments, task fields | `result.totalRecords` |
+
+Several read endpoints return a count unconditionally instead — sites and content return `result.totalRecords`, feed returns `result.total`, site members return `result.totalRows`.
+
+<Warning>
+  Do not paginate by computing `total / pageSize` and iterating page numbers. There are no page numbers, the underlying set can change between requests, and the count is not always present. Always drive the loop from the next-page token.
+</Warning>
+
+## Page size limits
+
+Maximums differ per endpoint and are enforced:
+
+| Endpoint family | Default | Maximum |
+|---|---|---|
+| Users | 50 | — |
+| Audiences, audience members, tasks, recognition | 10 | 100 (tasks, recognition) |
+| Sites, site categories, page categories, topics | 50 | 1000 |
+| Content | 16 | 50 |
+| Files | 16 | 250 |
+| People (`/identity/people/list`) | 10 | 200 |
+| People attribute values | 50 | 500 |
+| Feed reactions | — | 100 |
+| Enterprise search | — | 50 |
+
+Exceeding the maximum is a `400`, not a silent clamp. Check the endpoint in the API reference rather than assuming a global ceiling.
+
+## A reusable pattern
+
+```python
+def paginate(session, url, *, size_param="pageSize", token_param="pageToken",
+             page_size=50, items_key="items", token_key="nextPageToken",
+             params=None):
+    """Yield every item across all pages of a Simpplr list endpoint."""
+    token = None
+    while True:
+        query = dict(params or {})
+        query[size_param] = page_size
+        if token is not None:
+            query[token_param] = token
+
+        body = session.get(url, params=query).json()
+        result = body.get("result", {})
+
+        # Collections arrive under `items` or `listOfItems` depending on family.
+        yield from result.get(items_key, [])
+
+        token = result.get(token_key)
+        if not token:
+            return
+```
+
+Because the spellings differ by family, parameterize them rather than hard-coding one convention — that is what `size_param` / `token_param` / `items_key` are for.
+
+## Incremental sync
+
+For "what changed since last run," most list endpoints accept `modifiedAfter` as an ISO 8601 UTC timestamp:
+
+```bash
+curl -X GET 'https://platform.app.simpplr.com/v1/b2b/content/sites?size=100&modifiedAfter=2025-04-09T18:30:00.000Z' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+Combine it with `includeDeleted=true` so your local copy learns about removals as well as changes — otherwise deleted records simply stop appearing and your mirror silently drifts.

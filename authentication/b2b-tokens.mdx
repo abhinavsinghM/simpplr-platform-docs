@@ -1,0 +1,116 @@
+---
+title: "B2B API Tokens"
+description: "Client credentials for unattended, tenant-wide integrations"
+---
+
+The B2B API authenticates your application rather than a person. There is no login, no redirect, and no refresh token — just client credentials exchanged for an access token.
+
+## Get a token
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/identity/oauth/token' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "grant_type": "client_credentials",
+    "client_id": "<your_client_id>",
+    "client_secret": "<your_client_secret>",
+    "scope": "everything"
+  }'
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `grant_type` | Yes | Must be `client_credentials` |
+| `client_id` | Yes | From your [client application](/get-started/client-application) |
+| `client_secret` | Yes | From your client application |
+| `scope` | No | `read`, `write`, or `everything`. **Defaults to `read`** |
+
+Response:
+
+```json
+{ "access_token": "<access_token>" }
+```
+
+<Warning>
+  **Set `scope` explicitly.** It defaults to `read`, so an integration that provisions users or publishes content but omits `scope` receives a valid token and then fails on its first write — with a `403` that looks like a permissions problem rather than a token problem.
+</Warning>
+
+## Confirm it works
+
+The B2B API has a test endpoint for exactly this:
+
+```bash
+curl -X GET 'https://platform.app.simpplr.com/v1/b2b/identity/test' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+```json
+{
+  "status": "SUCCESS",
+  "result": {},
+  "message": "Integration with Extensibility Center B2B content management APIs is successful"
+}
+```
+
+## No refresh token
+
+The `client_credentials` grant issues no refresh token, by design — your application already holds the credentials needed to mint a new one. When a token expires, request another with the same call.
+
+Recommended pattern:
+
+1. Cache the access token in memory, shared across workers if practical.
+2. On a `401`, request a new token and retry the original call **once**.
+3. Never write the token to disk or logs.
+
+## Every write needs an actor
+
+Because no signed-in user exists, the B2B API cannot infer who an action belongs to — so you name them:
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/b2b/content/site-categories' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "Engineering",
+    "access": "all",
+    "createdBy": "a40cf504-b39f-4219-8d96-11ba48f7cced"
+  }'
+```
+
+Across the B2B API: 13 endpoints require `createdBy`, 13 require `modifiedBy`, 6 require `deletedBy` (as a **query** parameter), and the Task endpoints use `creatorId` / `modifierId` instead. Full breakdown: [Acting on Behalf of Users](/concepts/acting-as-users).
+
+<Info>
+  The named actor is not decoration — it drives attribution and is subject to that user's own permissions. Naming a user who cannot perform the action yields a `403`, not a silent override.
+</Info>
+
+## What this token can reach
+
+Areas available **only** on the B2B API:
+
+| Area | What it covers |
+|---|---|
+| Users | Full provisioning — create, read, update, deactivate, photo upload |
+| [Task](/guides/tasks) | Create and assign tasks, read assignments and field configuration |
+| [Analytics](/guides/data-export) | Register recurring CSV exports delivered over SFTP |
+| Audience Members | Read resolved audience membership |
+
+Enterprise search, alerts, notifications, video, and people-attribute discovery are **not** here — those are User API only. See [Choosing an API](/get-started/choosing-an-api#capability-coverage).
+
+## Security
+
+This secret carries tenant-wide authority. Treat it accordingly:
+
+- **Backend only.** Never in a browser bundle, mobile binary, or public repository.
+- **Secrets manager**, not committed configuration.
+- **Narrow scope.** A read-only pipeline should hold a `read` token.
+- **Redact in logs.** Strip the `Authorization` header from request logging.
+- **Separate per environment.** Never share a secret between production and a sandbox tenant.
+
+## Common failures
+
+| Symptom | Likely cause |
+|---|---|
+| `400` on the token call | Missing or misspelled `grant_type` / `client_id` / `client_secret`, or the application is not registered for `client_credentials` |
+| `401` on API calls | Absent `Authorization` header, malformed token, or expired token |
+| `403` on writes only | Token issued with default `read` scope, or the named actor lacks permission |
+| `400` naming a required field | A required actor field (`createdBy` / `modifiedBy` / `deletedBy`) was omitted |

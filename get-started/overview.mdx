@@ -1,0 +1,76 @@
+---
+title: "Overview"
+description: "What you can build with the Extensibility Center, and what you need before you start"
+---
+
+## What the Extensibility Center gives you
+
+The platform exposes Simpplr's core objects over REST. Rather than a thin wrapper over a database, the endpoints mirror the product's own concepts, so an integration you build behaves the way the product behaves — including permissions, audiences, and content lifecycle.
+
+The surface breaks down into these areas:
+
+| Area | What you can do |
+|---|---|
+| **Sites** | Create and update sites, manage categories, add and remove members, change roles and status |
+| **Content** | Publish and update pages, events, and albums; approve, reject, publish, unpublish, validate, and delete content; manage page categories |
+| **Feeds** | Create posts and questions, comment, react, and read feeds at home / site / content scope |
+| **Files** | Get presigned upload URLs, register uploaded files against sites and content, and search files |
+| **People** | Read and update profiles, discover profile attribute metadata and allowed values |
+| **Users** | Full user provisioning — create, read, update, deactivate (B2B only) |
+| **Audiences** | Build rule-based audiences and read their membership |
+| **Tasks** | Create and assign tasks, track assignments, inspect task field configuration (B2B only) |
+| **Search** | Enterprise search, autocomplete, and AI smart answers (User API only) |
+| **Alerts & Notifications** | Create and manage org-wide alerts and per-user notifications (User API only) |
+| **Video** | Native video tokens, status, languages, and search (User API only) |
+| **Recognition** | Read recognition and awards activity |
+| **Analytics** | Register recurring CSV data exports over SFTP (B2B only) |
+
+The exact split between the two APIs matters — see [Choosing an API](/get-started/choosing-an-api).
+
+## What you can build
+
+A few shapes of integration this is designed for:
+
+- **Provisioning and lifecycle sync.** Keep Simpplr users, sites, and audiences in step with your HRIS or directory, using the B2B API on a schedule.
+- **Content automation.** Publish news, events, or knowledge pages into Simpplr from an external CMS, editorial workflow, or internal tool.
+- **Embedded experiences.** Build an app or extension that acts as the signed-in person via the User API, so everything it shows respects that user's own entitlements.
+- **Analytics pipelines.** Register recurring CSV exports and land Simpplr activity data in your warehouse. See [Data Export](/guides/data-export).
+- **Search-backed assistants.** Query enterprise search and smart answers to surface intranet knowledge inside another surface.
+
+## Prerequisites
+
+<Steps>
+  <Step title="A Simpplr tenant you're authorized to integrate with">
+    All calls are tenant-scoped. You need an environment to build against and the permission to register an application in it.
+  </Step>
+  <Step title="A registered client application">
+    This yields the `client_id` and `client_secret` every token request needs. See [Creating the client application](/get-started/client-application).
+  </Step>
+  <Step title="A decision on which API to use">
+    The two APIs use different OAuth grants and expose different capabilities, so this is not a detail you can defer. See [Choosing an API](/get-started/choosing-an-api).
+  </Step>
+  <Step title="An HTTP client">
+    Nothing else is required — there is no SDK dependency. Every example in these docs is plain `curl` you can paste and adapt.
+  </Step>
+</Steps>
+
+## Base URL
+
+Both APIs are served from the same host and version prefix:
+
+```
+https://platform.app.simpplr.com/v1
+```
+
+Every path in the API reference is relative to that base. B2B paths are additionally namespaced under `/b2b/` — for example `POST /v1/b2b/content/sites`. See [Platform Conventions](/concepts/conventions#base-url-and-environments) for how environments vary.
+
+## Next
+
+<Columns cols={2}>
+  <Card title="Choosing an API" icon="git-compare" href="/get-started/choosing-an-api">
+    A capability-by-capability comparison of the User and B2B APIs.
+  </Card>
+  <Card title="Creating the client application" icon="app-window" href="/get-started/client-application">
+    How to obtain and safeguard your credentials.
+  </Card>
+</Columns>

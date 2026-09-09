@@ -1,0 +1,85 @@
+---
+title: "Creating the Client Application"
+description: "Register an application to obtain the client credentials both APIs require"
+---
+
+Every token request — for either API — is authenticated with a **client ID** and **client secret** belonging to a registered client application in your tenant. Nothing else works until you have these.
+
+## What you need to end up with
+
+| Credential | Used for | Notes |
+|---|---|---|
+| `client_id` | Both APIs, every token request | Identifies your application to the tenant |
+| `client_secret` | Both APIs, every token request | Treat as a password — see [Safeguarding credentials](#safeguarding-credentials) |
+| Authorization code | User API only | A short-lived, per-user code exchanged for the first token pair |
+
+<Info>
+  A single application registration is scoped to one tenant. If you build against a non-production environment first, expect a separate registration (and separate credentials) for each environment you target.
+</Info>
+
+## Registering the application
+
+<Note>
+  **Tenant-specific step.** The exact navigation for registering an application lives in your Simpplr admin console and varies by tenant configuration and role. Confirm the current path with your Simpplr administrator or your Simpplr contact before scripting anything around it. The rest of this page — what the credentials are, how scopes behave, and how to protect them — is stable regardless of how you obtain them.
+</Note>
+
+When you register, you will be asked to decide two things that are worth getting right the first time:
+
+**Which grant type the application uses.** This follows directly from [which API you chose](/get-started/choosing-an-api):
+
+- `client_credentials` for the B2B API
+- `authorization_code` (with refresh) for the User API
+
+**Which scope the application requests.** Both APIs recognize the same three:
+
+| Scope | Grants |
+|---|---|
+| `read` | Read-only access. This is the **default** on the B2B token endpoint if you omit `scope` entirely |
+| `write` | Create and update |
+| `everything` | Full access |
+
+<Warning>
+  Request the narrowest scope that does the job. On the B2B API, `scope` is optional and defaults to `read` — so a write integration that forgets to request `write` or `everything` will authenticate successfully and then fail on its first write, which is a confusing failure to debug. Set it explicitly.
+</Warning>
+
+## The User API also needs an authorization code
+
+For the User API, credentials alone are not enough: a person must authorize your application, which produces a short-lived **authorization code** that you exchange for an access token and refresh token.
+
+The mechanics of generating that code are documented in the platform's authentication reference, linked from the API spec itself: [Authenticating via an external application → Get the authorization code](https://platform.simpplr.com/reference/authenticating-via-an-external-application-1#get-the-authorization-code).
+
+Once you have a code, continue to [User API tokens](/authentication/user-tokens).
+
+The B2B API skips this entirely — client ID and secret are sufficient. See [B2B API tokens](/authentication/b2b-tokens).
+
+## Safeguarding credentials
+
+The client secret authenticates your application to the whole tenant. For B2B in particular, a leaked secret is tenant-wide exposure, not one user's account.
+
+- **Never put the secret in client-side code.** Not in a browser bundle, a mobile app binary, or a public repository. The `client_credentials` flow is a backend-only flow for exactly this reason.
+- **Store it in a secrets manager**, not in a config file committed to source control.
+- **Scope narrowly** — see the warning above.
+- **Keep environments separate.** Don't reuse a production secret against a sandbox tenant or vice versa.
+- **Have a rotation path** before you need one. Know who can reissue the secret and how quickly.
+
+## Verifying the registration works
+
+The fastest confirmation is a token request followed by the B2B test endpoint, which exists precisely to prove an integration is wired up correctly:
+
+```bash
+curl -X GET 'https://platform.app.simpplr.com/v1/b2b/identity/test' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+A success response confirms credentials, scope, and connectivity in one call. Walk through it end to end in [Making your first request](/get-started/first-request).
+
+## Next
+
+<Columns cols={2}>
+  <Card title="Making your first request" icon="terminal" href="/get-started/first-request">
+    Token, test call, and reading the response envelope.
+  </Card>
+  <Card title="Authentication" icon="key-round" href="/authentication/overview">
+    Both flows in detail, including refresh.
+  </Card>
+</Columns>

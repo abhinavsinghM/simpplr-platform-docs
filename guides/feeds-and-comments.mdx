@@ -1,0 +1,183 @@
+---
+title: "Feeds & Comments"
+description: "Posting, commenting, and reacting — and the read/write endpoint split that surprises everyone"
+---
+
+The feed is Simpplr's conversational surface: posts, questions, comments, and reactions, at home, site, or content scope.
+
+## Reads and writes live on different paths
+
+This is the first thing to internalize, because it looks like a typo:
+
+| Purpose | Path prefix |
+|---|---|
+| **Write** — create, update, delete, comment, react | `/wfeed/...` |
+| **Read** — list feeds, get one, list comments and reactions | `/rfeed/...` |
+
+```
+POST   /wfeed/feeds                      # create a post
+GET    /rfeed/feeds                      # list feeds
+PUT    /wfeed/feeds/{feedId}             # update
+GET    /rfeed/feeds/{feedId}             # read one
+POST   /wfeed/feeds/{feedId}/comments    # comment
+GET    /rfeed/feeds/{feedId}/comments    # read comments
+```
+
+Same split on B2B, under `/b2b/wfeed/...` and `/b2b/rfeed/...`. Sending a write to `rfeed` (or vice versa) produces a routing failure, not a helpful validation message.
+
+## Creating a post
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/b2b/wfeed/feeds' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "textHtml": "<p>Welcome to the team, everyone.</p>",
+    "scope": "site",
+    "siteId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "type": "post",
+    "createdBy": "02369949-cfc1-49a7-a2a7-d03afa9af84a"
+  }'
+```
+
+Two fields shape the post:
+
+**`type`** — `post` or `question`. For `question`, **`title` is required**; for `post` it is optional.
+
+**`scope`** — where the post lives, and which other fields become mandatory:
+
+| `scope` | `siteId` | ABAC only | Notes |
+|---|---|---|---|
+| `public` | `null` | No | Home feed, visible tenant-wide |
+| `site` | Required | No | Posted into a site |
+| `accessible_audience` | `null` | Yes | The ABAC equivalent of `public` |
+| `site_target_audience` | Required | Yes | For a public site on an ABAC tenant |
+| `site_members` | Required | Yes | Private sites only |
+| `content` | Required + `contentId` | Yes | A comment thread on a content item |
+
+<Warning>
+  The request body is a `oneOf` across these combinations, so the validator enforces the pairing strictly. `scope: "site"` without `siteId`, or `type: "question"` without `title`, fails validation rather than defaulting. The ABAC-only scopes are rejected outright on non-ABAC tenants — see [Audiences & ABAC](/concepts/audiences-and-abac).
+</Warning>
+
+Response:
+
+```json
+{
+  "status": "success",
+  "result": { "feedId": "49502e9f-a6e6-4773-a0b4-64be9388b7b1" },
+  "message": "Feed created successfully"
+}
+```
+
+### Attachments
+
+Attach already-uploaded files via `listOfAttachedFiles`:
+
+```json
+{
+  "listOfAttachedFiles": [
+    { "provider": "intranet", "fileId": "644893bf-66dd-4b67-9771-76b21d91ce5c" }
+  ]
+}
+```
+
+<Note>
+  The key here is **`fileId`** (camelCase), whereas the file-registration endpoints use **`file_id`** (snake_case). Same concept, different spelling, and an easy source of a silent no-op. See [File Uploads](/concepts/file-uploads).
+</Note>
+
+External providers work here too — `googledrive`, `box`, `onedrive`, `sharepoint`, `dropbox` — each requiring `name`, `size`, and `type` alongside `fileId`.
+
+## Comments
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/b2b/wfeed/feeds/{feedId}/comments' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "textHtml": "<p>Great news.</p>",
+    "createdBy": "e5149282-2b89-4588-8b70-590ea3218e83"
+  }'
+```
+
+Update with `PUT .../comments/{commentId}` (`textHtml` + `modifiedBy`), delete with `DELETE .../comments/{commentId}?deletedBy=<uuid>`.
+
+Reading comments has a **required-pagination quirk**:
+
+```bash
+curl -X GET 'https://platform.app.simpplr.com/v1/b2b/rfeed/feeds/{feedId}/comments?size=5&nextPageToken=' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+Both `size` and `nextPageToken` are **required**, and the first page expects an **empty string** token rather than an omitted parameter. See [Pagination](/concepts/pagination#feeds-first-page-quirk).
+
+## Reactions
+
+One endpoint both adds and removes, discriminated by `action`:
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/b2b/wfeed/feeds/{feedId}/reactions' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "action": "add",
+    "reactionType": "emoji/1F44D",
+    "createdBy": "e5149282-2b89-4588-8b70-590ea3218e83"
+  }'
+```
+
+| `reactionType` | Meaning |
+|---|---|
+| `like` | Standard like |
+| `emoji/1F44D` | Thumbs up |
+| `emoji/2764` | Love |
+| `emoji/1F606` | Haha |
+| `emoji/1F4A1` | Insightful |
+| `emoji/1F64F` | Pray |
+| `emoji/1F44F` | Clapping |
+| `emoji/2B06` | Upvote — **questions only** |
+
+The emoji codes are Unicode code points in the `emoji/<HEX>` form. `emoji/2B06` (upvote) is only valid on `question`-type feeds.
+
+Reading reactions supports statistics and filtering:
+
+```bash
+curl -X GET 'https://platform.app.simpplr.com/v1/b2b/rfeed/feeds/{feedId}/reactions?size=10&includeStats=true' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+`includeStats=true` adds a `reactionStats` array of per-type counts, and the response includes a `userDetails` map keyed by user ID so you can render names without extra lookups.
+
+## Reading feeds
+
+```bash
+curl -X GET 'https://platform.app.simpplr.com/v1/b2b/rfeed/feeds?size=16&nextPageToken=&feedContext=site&siteId={siteId}&sortBy=lastActivityAt' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+| Parameter | Notes |
+|---|---|
+| `size`, `nextPageToken` | **Both required**; first page uses `nextPageToken=` |
+| `feedContext` | `home` (default), `site` (needs `siteId`), `content` (needs `siteId` **and** `contentId`) |
+| `sortBy` | `createdAt` (default) or `lastActivityAt`; the User API adds `preference` |
+| `type` | `post` or `question` |
+| `feedIds` / `exemptFeedIds` | Comma-separated, no spaces — include or exclude specific feeds |
+
+The **User API has a much richer `filter`** enum, because these are relative to the signed-in person: `all`, `iFollow`, `preference`, `askedByMe`, `votedByMe`, `favourited`, `toMe`, `duplicate`, `unanswered`, `answeredByMe`, `answeredAndApproved`. The B2B API only supports `all`, since there is no "me."
+
+That difference is a good reason to use the User API for anything feed-reading that powers a personal view.
+
+## Questions and duplicates
+
+Question-type feeds carry extra machinery: `duplicateOf`, `listOfDuplicates`, `canMarkDuplicate`, `isApproved` and `canApproveComment` on comments, and the upvote reaction. To find candidate duplicates before posting, `GET /rfeed/feeds` accepts `isSearchForMarkDuplicate=true` alongside `exemptFeedIds`.
+
+## Moderation signals
+
+Feed and comment responses include `isToxic` and `moderationResult`. Where a tenant has moderation enabled, respect these rather than rendering content unconditionally — a `true` on `isToxic` means the platform flagged it.
+
+## Practical notes
+
+- **Write to `wfeed`, read from `rfeed`.** The single most common mistake here.
+- **`fileId` on attachments, `file_id` on file registration.**
+- **Feed and comment reads require `size` and `nextPageToken`**, with `""` on the first page.
+- **`textHtml` is HTML on write**, but reads may return `textJson` (a Tiptap document) alongside or instead of `textHtml` — handle both.
+- **Prefer the User API for personalized feed reads**, since the `filter` values that matter are user-relative.

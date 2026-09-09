@@ -1,0 +1,237 @@
+---
+title: "Errors"
+description: "Which error shapes are stable, which are not, and how to parse them defensively"
+---
+
+Status codes are consistent across the platform. **Error bodies are not** — `400` responses come in at least eight distinct shapes across the two APIs. This page tells you which parts you can rely on.
+
+## Status codes
+
+| Code | Meaning | Retry? |
+|---|---|---|
+| `400` | Validation failure — malformed input, unsupported enum value, missing required field | No, fix the request |
+| `401` | Missing or invalid authentication token | Yes, after renewing the token |
+| `403` | Authenticated but not permitted | No, fix scope or actor permissions |
+| `404` | Object not found, or a request/acknowledgement ID that has expired | No |
+| `429` | Rate limited (declared on some endpoints) | Yes, with backoff |
+| `500` / `503` | Server-side or upstream failure | Yes, with backoff |
+
+## The two shapes you can rely on
+
+`401` and `403` are the only error responses that are uniform across every endpoint in both APIs.
+
+**`401` — missing or invalid token.** Body is always a single message:
+
+```json
+{ "message": "Missing/Invalid authentication token" }
+```
+
+**`403` — authenticated but not permitted.** Body is always a code plus a message:
+
+```json
+{
+  "error_code": 2001,
+  "message": "Something went wrong, please try again"
+}
+```
+
+<Note>
+  The `403` message text is deliberately generic and tells you nothing diagnostic. Treat `403` as "scope or permission," not as a transient fault, and check the two causes below.
+</Note>
+
+### 401 vs 403
+
+Encode this distinction in your client, because the remedies are opposite:
+
+| | `401` | `403` |
+|---|---|---|
+| Means | The platform does not know who you are | It knows who you are and says no |
+| Usual cause | Absent header, malformed or expired token | Token scope too narrow, or the named actor lacks permission |
+| Correct response | Renew the token, retry **once** | Do not retry — fix scope or actor |
+
+Retrying a `403` in a loop will never succeed and only generates load. The two most common `403` causes:
+
+1. **A B2B token issued with the default `read` scope** attempting a write. See [B2B API Tokens](/authentication/b2b-tokens).
+2. **A named actor without permission** for the operation — the `createdBy` / `modifiedBy` user genuinely cannot do it. See [Acting on Behalf of Users](/concepts/acting-as-users).
+
+## The `400` shapes
+
+Validation errors vary by endpoint family. All the following are in active use:
+
+<AccordionGroup>
+  <Accordion title="Field-level errors with seq_id (sites, content, files, feed)">
+```json
+{
+  "status": "error",
+  "errors": [
+    {
+      "seq_id": 0,
+      "field_name": "name",
+      "error_code": 1001,
+      "message": "The 'name' field is required and must not be empty"
+    }
+  ]
+}
+```
+The most common shape on content, sites, and file endpoints. `field_name` tells you what to fix; `error_code` is a numeric platform code.
+  </Accordion>
+
+  <Accordion title="Parameter validation (account config, users, people attributes)">
+```json
+{
+  "message": "Validation failed",
+  "errors": [
+    { "param": "fields", "message": "Unsupported fields: minimal5." }
+  ]
+}
+```
+Note the key is `param` here, not `field_name`.
+  </Accordion>
+
+  <Accordion title="Field-name validation (user create/update)">
+```json
+{
+  "message": "Invalid user object",
+  "errors": [
+    { "fieldName": "email", "message": "Invalid email format" }
+  ]
+}
+```
+A third spelling — `fieldName` — on the Users endpoints.
+  </Accordion>
+
+  <Accordion title="Message plus details (audiences)">
+```json
+{
+  "message": "The input provided is invalid.",
+  "errors": [
+    {
+      "message": "Invalid payload",
+      "details": "Payload must not include categoryId or parentId when parent child feature is disabled."
+    }
+  ]
+}
+```
+On audience create, `details` may be an **object** instead of a string, carrying `invalidAttributes`, `invalidOperators`, and `invalidValues`.
+  </Accordion>
+
+  <Accordion title="Nested error object (content update, page/event/album update)">
+```json
+{
+  "status": "error",
+  "message": "Failed to update page",
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Request validation failed",
+    "details": [
+      { "field": "request", "message": "At least one field must be provided for update" }
+    ]
+  }
+}
+```
+Here the detail lives under a singular `error` object rather than a plural `errors` array.
+  </Accordion>
+
+  <Accordion title="Structured error with user-facing message (tasks)">
+```json
+{
+  "status": "error",
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "userIds is required",
+    "ufMessage": "Please provide valid user IDs.",
+    "details": { "field": "userIds", "constraint": "required" },
+    "httpStatusCodeText": "Bad Request",
+    "timestamp": "2026-02-06T10:00:00.000Z"
+  }
+}
+```
+The Task endpoints are the most structured, and the only family with a distinct `ufMessage` intended for display to end users.
+  </Accordion>
+
+  <Accordion title="Enterprise search">
+```json
+{
+  "success": false,
+  "status_code": 400,
+  "error": "Not a vaild request"
+}
+```
+Enterprise search uses `success` / `status_code` rather than `status` / `message`, and does not share the envelope used elsewhere.
+  </Accordion>
+</AccordionGroup>
+
+## Parsing defensively
+
+Given the above, do not write a parser that assumes one shape. A workable strategy:
+
+```python
+def describe_error(status_code, body):
+    """Best-effort human description across the platform's error shapes."""
+    if not isinstance(body, dict):
+        return f"HTTP {status_code}"
+
+    # Enterprise search style
+    if "success" in body and "status_code" in body:
+        return body.get("error") or body.get("message") or f"HTTP {status_code}"
+
+    parts = []
+    if isinstance(body.get("message"), str):
+        parts.append(body["message"])
+
+    # Singular nested error object (content update, tasks)
+    err = body.get("error")
+    if isinstance(err, dict):
+        parts.append(err.get("ufMessage") or err.get("message") or "")
+        details = err.get("details")
+        if isinstance(details, list):
+            parts += [f"{d.get('field')}: {d.get('message')}" for d in details]
+        elif isinstance(details, dict):
+            parts.append(str(details))
+    elif isinstance(err, str):
+        parts.append(err)
+
+    # Plural errors array — field key is spelled three different ways
+    for item in body.get("errors") or []:
+        if not isinstance(item, dict):
+            continue
+        field = (item.get("field_name") or item.get("fieldName")
+                 or item.get("param") or item.get("field"))
+        msg = item.get("message") or ""
+        detail = item.get("details")
+        text = f"{field}: {msg}" if field else msg
+        if detail:
+            text = f"{text} ({detail})"
+        parts.append(text)
+
+    return " | ".join(p for p in parts if p) or f"HTTP {status_code}"
+```
+
+Two rules worth encoding:
+
+- **Branch on the HTTP status code, never on the body.** The body's `status` field is sometimes the string `"error"` and sometimes a number, and its `message` text is not a stable contract.
+- **Log the raw body** on unexpected failures. Given the shape variation, a parsed-and-discarded error will eventually hide the one detail you needed.
+
+## Retries
+
+| Code | Strategy |
+|---|---|
+| `401` | Renew token, retry once. Do not loop |
+| `429` | Honor `Retry-After` where present, then exponential backoff with jitter |
+| `500`, `503` | Exponential backoff with jitter, capped attempts |
+| `400`, `403`, `404` | Never retry — the request will not start succeeding |
+
+Rate limiting is declared on some endpoints (`429`) but the specs do not publish limits or windows, so treat backoff as mandatory rather than tuning to a documented budget, and confirm your expected volumes with your Simpplr contact before a large backfill.
+
+## Bulk operations fail differently
+
+Long-running bulk work does not report failure through the HTTP status of the submitting call. `POST /b2b/content/sites/content/bulk-ops/{opType}` returns `status: "new"`, and you then poll `GET /b2b/content/sites/content/bulk-ops/{opType}/{ackId}/status`, where the terminal states are:
+
+| `status` | Meaning |
+|---|---|
+| `new` | Accepted, not started |
+| `in_progress` | Running — carries `progress.totalRecords` and `progress.processedRecords` |
+| `completed` | Done — carries `details.downloadUrl` and `details.totalRecords` |
+| `failed` | Failed — carries `reason` |
+
+A `200` on submission means "accepted," not "succeeded." Poll to completion before reporting success upstream.

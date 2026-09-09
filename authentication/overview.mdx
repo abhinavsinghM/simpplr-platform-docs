@@ -1,0 +1,87 @@
+---
+title: "Authentication Overview"
+description: "OAuth 2.0 across both APIs — grants, scopes, and how tokens are presented"
+---
+
+Both APIs use OAuth 2.0 and share a single token endpoint. What differs is the **grant type** you use against it, which follows from [which API you chose](/get-started/choosing-an-api).
+
+## One token endpoint, two grants
+
+```
+POST https://platform.app.simpplr.com/v1/identity/oauth/token
+```
+
+| API | `grant_type` | Also send | You receive |
+|---|---|---|---|
+| **User API** | `authorization_code` | `client_id`, `client_secret`, `auth_code` | `access_token` + `refresh_token` |
+| **User API** (renewal) | `refresh_token` | `client_id`, `client_secret` | A fresh `access_token` |
+| **B2B API** | `client_credentials` | `client_id`, `client_secret`, optional `scope` | `access_token` |
+
+The token endpoint is the one place in the platform that is **not** authenticated with a bearer token — it takes your client credentials in the request body instead.
+
+<Columns cols={2}>
+  <Card title="User API tokens" icon="user" href="/authentication/user-tokens">
+    Authorization code exchange and refresh, for acting as a signed-in person.
+  </Card>
+  <Card title="B2B API tokens" icon="server" href="/authentication/b2b-tokens">
+    Client credentials, for unattended tenant-wide integrations.
+  </Card>
+</Columns>
+
+## Presenting the token
+
+Every other request carries the token as a bearer credential:
+
+```bash
+curl -X GET 'https://platform.app.simpplr.com/v1/b2b/identity/test' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+This includes the presigned file upload URLs, which is unusual and easy to miss — see [File Uploads](/concepts/file-uploads).
+
+## Scopes
+
+Both APIs recognize the same three scopes:
+
+| Scope | Grants |
+|---|---|
+| `read` | Read data |
+| `write` | Create and update data |
+| `everything` | Full access |
+
+<Warning>
+  On the B2B token request, `scope` is **optional and defaults to `read`**. A write integration that omits it gets a perfectly valid token that fails on its first write. Always set `scope` explicitly.
+</Warning>
+
+Request the narrowest scope that does the job. A read-only reporting integration should hold a `read` token, so a bug in it cannot mutate tenant data.
+
+## Token lifetime
+
+Access tokens are short-lived and must be renewed. How you renew depends on the grant:
+
+- **User API** — exchange the `refresh_token` for a new access token without involving the user again. See [Refreshing a token](/authentication/user-tokens#refreshing-a-token).
+- **B2B API** — no refresh token is issued. Request a new token with the same client credentials.
+
+<Note>
+  Exact token TTLs are environment configuration rather than part of the API contract, so don't hard-code an assumed lifetime. Treat a `401` on a previously working call as "renew and retry once," and confirm current lifetimes with your Simpplr contact if you need them for capacity planning.
+</Note>
+
+A practical pattern: cache the token in memory, renew on demand when a call returns `401`, and retry that call exactly once. Renewing on a fixed timer alone will eventually drift out of step with server-side expiry.
+
+## Failure modes
+
+| Status | Meaning | Usual cause |
+|---|---|---|
+| `400` | The token request itself was malformed | Missing `grant_type`, `client_id`, or `client_secret`; wrong grant for the application |
+| `401` | Missing or invalid authentication token | Absent `Authorization` header, malformed token, or an expired token |
+| `403` | Authenticated but not permitted | Scope narrower than the operation needs, or the named actor lacks permission |
+
+The `401` and `403` distinction is worth encoding in your client — see [Errors](/concepts/errors#401-vs-403).
+
+## Security practices
+
+- **Backend only for `client_credentials`.** The B2B secret is tenant-wide authority; never ship it to a browser or mobile client.
+- **Store secrets in a secrets manager**, not in committed config.
+- **Never log tokens or secrets.** Redact the `Authorization` header in request logging.
+- **Keep environments separate** — distinct registrations and distinct secrets per tenant.
+- **Have a rotation path** identified before you need it.

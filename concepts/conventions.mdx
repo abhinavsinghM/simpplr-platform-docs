@@ -1,0 +1,126 @@
+---
+title: "Platform Conventions"
+description: "Base URLs, response envelopes, identifiers, and timestamps that apply across every endpoint"
+---
+
+These hold across both APIs. Learning them once saves re-reading each endpoint's schema.
+
+## Base URL and environments
+
+Both APIs are served from one host and version prefix:
+
+```
+https://platform.app.simpplr.com/v1
+```
+
+In the specs this is expressed as a templated server, `https://{endpoint}/v1`, where `endpoint` defaults to `platform.app.simpplr.com`. Non-production tenants are reached by substituting a different host, so treat the base URL as **configuration in your integration, never a hard-coded constant**.
+
+The B2B API namespaces its paths under `/b2b/`:
+
+| API | Example full URL |
+|---|---|
+| User API | `https://platform.app.simpplr.com/v1/content/sites/{site_id}` |
+| B2B API | `https://platform.app.simpplr.com/v1/b2b/content/sites/{siteId}` |
+
+The token endpoint is shared and **not** under `/b2b/`, even for B2B: `POST /v1/identity/oauth/token`.
+
+<Note>
+  In the B2B spec, the OAuth `tokenUrl` declared on the security scheme points at a `simpplr.xyz` host, which is inconsistent with the `platform.app.simpplr.com` production host declared in `servers`. Use the `servers` host — shown above — and confirm the correct token host for your environment with your Simpplr contact.
+</Note>
+
+## The response envelope
+
+Successful responses generally wrap your data rather than returning it at the top level:
+
+```json
+{
+  "status": "success",
+  "message": "Site categories retrieved successfully",
+  "result": { }
+}
+```
+
+| Field | Notes |
+|---|---|
+| `status` | Either the string `"success"` / `"SUCCESS"` **or** the numeric HTTP code, depending on the endpoint family |
+| `message` | Human-readable summary. Do not branch on its text — it is not a stable contract |
+| `result` | Your actual payload |
+
+<Warning>
+  `status` is not consistently typed across the platform. Some endpoint families return `"success"` (a string), others return `200` (a number). Branch on the **HTTP status code**, never on the body's `status` field.
+</Warning>
+
+Some newer endpoint families vary this further — the Task endpoints add a `responseTimeStamp`, and a few responses use `data` instead of `result`. Read the specific endpoint in the API reference before assuming.
+
+## Collections
+
+Inside `result`, lists arrive under one of two keys:
+
+| Key | Where you'll see it |
+|---|---|
+| `listOfItems` | Most content, sites, files, feed, and recognition endpoints |
+| `items` | Users, audiences, people, and people-attribute endpoints |
+
+Both carry the same idea; only the key differs. Along with the array you typically get a paging token and, on request, a total — see [Pagination](/concepts/pagination).
+
+## Identifiers
+
+Nearly every object is identified by a **UUID**:
+
+```
+55ec49b0-61a0-4162-9853-fd45ab2164fa
+```
+
+Two practical consequences:
+
+- **Malformed UUIDs are a validation error, not a not-found.** Passing `abc` where a `siteId` is expected returns `400` with a message like `The 'site_id' must be a valid UUID` — not `404`.
+- **Comma-separated ID lists are common** for bulk filters — for example `siteIds`, `contentIds`, `feedIds`, and `userIds`. Send them without spaces: `id1,id2,id3`.
+
+## Timestamps
+
+Most timestamps are **ISO 8601 in UTC**:
+
+```
+2025-04-09T18:30:00.000Z
+```
+
+Filters such as `modifiedAfter`, `publishAt`, `publishTo`, `startsAt`, and `endsAt` all expect this form, and several endpoints reject other formats explicitly.
+
+Two exceptions to watch for:
+
+- **Date-only fields** use `YYYY-MM-DD` — task `dueDate` and `scheduledDate`, and some audience date operands.
+- **The Task endpoints return epoch milliseconds** as integers (`dueDate: 1707494400000`, `createdAt`, `modifiedAt`) while *accepting* `YYYY-MM-DD` on write. Read and write formats differ there.
+
+## Tenancy
+
+Every token is bound to one tenant, and every call is implicitly scoped to it. There is no cross-tenant addressing, and no tenant identifier in the path — if you integrate with several tenants, you hold several sets of credentials and route by credential.
+
+## Soft deletes
+
+Deletes are frequently **soft**, and many list endpoints let you see through them:
+
+| Parameter | Effect |
+|---|---|
+| `includeDeleted` | Include deleted records in the result |
+| `includeDeactivated` | Include deactivated sites |
+| `includeInactive` | Include deactivated export registrations |
+| `includeContentFromDeactivatedSites` | Include content whose site was deactivated |
+
+They default to `false`, so ordinary reads show only live records. If a record "disappeared" but you expected it, re-read with the relevant flag before concluding it is gone.
+
+## Capability flags
+
+User API responses are rich in `can*` booleans — `canEdit`, `canDelete`, `canManage`, `canCreatePage`, `canDownload`, `canFavorite`. These are computed for **the authorizing user** and are the intended way to decide what to offer in a UI.
+
+Prefer them over inferring permissions from roles yourself: they already account for site access, content state, and tenant configuration.
+
+## What to read next
+
+<Columns cols={2}>
+  <Card title="Pagination" icon="list" href="/concepts/pagination">
+    Token-based paging, and why the parameter names vary.
+  </Card>
+  <Card title="Errors" icon="triangle-alert" href="/concepts/errors">
+    The error shapes, and which ones are actually stable.
+  </Card>
+</Columns>

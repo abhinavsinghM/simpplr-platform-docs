@@ -1,0 +1,111 @@
+---
+title: "User API Tokens"
+description: "Exchange an authorization code for an access and refresh token, and keep it alive"
+---
+
+The User API acts as a specific signed-in person, so getting a token is a three-party exchange: the person authorizes your application, that authorization becomes a short-lived code, and you exchange the code for tokens.
+
+## 1. Obtain an authorization code
+
+A person must authorize your application, which yields a single-use authorization code. The mechanics are documented in the platform's authentication reference, linked from the API spec itself:
+
+<Card title="Get the authorization code" icon="external-link" href="https://platform.simpplr.com/reference/authenticating-via-an-external-application-1#get-the-authorization-code">
+  Platform reference for generating an authorization code for an external application.
+</Card>
+
+Authorization codes are short-lived and single-use. Exchange one promptly, and never store it beyond the exchange.
+
+## 2. Exchange the code for tokens
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/identity/oauth/token' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "grant_type": "authorization_code",
+    "client_id": "<your_client_id>",
+    "client_secret": "<your_client_secret>",
+    "auth_code": "<authorization_code>"
+  }'
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `grant_type` | Yes | `authorization_code` for the initial exchange |
+| `client_id` | Yes | From your [client application](/get-started/client-application) |
+| `client_secret` | Yes | From your client application |
+| `auth_code` | For this grant | The code from step 1 |
+
+Response:
+
+```json
+{
+  "access_token": "<access_token>",
+  "refresh_token": "<refresh_token>"
+}
+```
+
+Store the **refresh token** durably and associate it with the user it belongs to. It is what lets you keep acting for that person without sending them back through authorization.
+
+## 3. Call the API as that user
+
+```bash
+curl -X GET 'https://platform.app.simpplr.com/v1/account/config' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+Every call is now evaluated as the authorizing person. A private site they are not a member of is invisible to your integration too — which is the point, and why User API responses carry so many `can*` capability flags (`canEdit`, `canDelete`, `canManage`, `canCreatePage`). Read those flags rather than inferring permissions yourself; they tell you what this specific user may do with each object.
+
+## Refreshing a token
+
+When the access token expires, exchange the refresh token — no user interaction required:
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/identity/oauth/token' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "grant_type": "refresh_token",
+    "client_id": "<your_client_id>",
+    "client_secret": "<your_client_secret>"
+  }'
+```
+
+<Note>
+  For this grant, `auth_code` is not sent — the spec marks it as required only when exchanging an authorization code.
+</Note>
+
+A robust client:
+
+1. Uses the cached access token.
+2. On a `401`, refreshes once and retries the original call.
+3. If the refresh itself fails, treats the user's authorization as revoked and re-runs step 1 of this page.
+
+Do not rely solely on a fixed refresh timer — server-side expiry is configuration, not contract, so reactive renewal on `401` is what keeps a client correct.
+
+## Scopes
+
+Request the narrowest of `read`, `write`, or `everything` that your app needs. An app that only surfaces intranet content should hold `read`, so a bug cannot post on the user's behalf.
+
+## What this token can reach
+
+Areas available **only** on the User API:
+
+| Area | What it covers |
+|---|---|
+| [Enterprise search](/guides/enterprise-search) | Search, autocomplete, and AI smart answers |
+| Alerts | Org-wide alert create / update / delete / search |
+| Notifications | Per-user notification inbox |
+| Video | Native video tokens, status, languages, search |
+| People Attributes | Profile attribute metadata and allowed values |
+
+Areas **not** available here — user provisioning, tasks, and data export — are B2B-only. See [Choosing an API](/get-started/choosing-an-api#capability-coverage).
+
+## Common failures
+
+| Symptom | Likely cause |
+|---|---|
+| `400` on the exchange | Expired, already-used, or mistyped `auth_code` |
+| `401` on every call | Missing `Authorization` header, or a malformed / expired access token |
+| `403` on a specific call | Token scope too narrow, or this user genuinely lacks permission for that object |
+| Object missing from a list | Correct behavior — the authorizing user cannot see it |
+
+That last row is worth internalizing: an "empty" result on the User API is frequently a permissions outcome, not a bug.

@@ -1,0 +1,254 @@
+---
+title: "Tasks"
+description: "Create and assign tasks, track per-assignee progress, and work with tenant task fields"
+---
+
+<Info>
+  Tasks are **B2B API only** — 9 operations. There is no User API equivalent. See [Choosing an API](/get-started/choosing-an-api#only-in-the-b2b-api).
+</Info>
+
+The Task endpoints are the newest family in the platform, and they follow slightly different conventions from everything else — different actor field names, different error shape, and epoch-millisecond timestamps on read. Worth knowing before you start.
+
+## Creating a task
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/b2b/task/tasks' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "title": "Complete quarterly report",
+    "description": "Prepare Q4 financial summary for stakeholders",
+    "priority": "high",
+    "dueDate": "2026-02-15",
+    "assignedTo": {
+      "users": [
+        { "id": "24a16040-5960-4f23-9846-ece10ace0498" },
+        { "id": "9a736d37-4337-4f77-b177-deb3efcfd190" }
+      ]
+    },
+    "creatorId": "9a736d37-4337-4f77-b177-deb3efcfd190"
+  }'
+```
+
+Required: `title`, `assignedTo`, `creatorId`, `dueDate`, `priority`.
+
+| Field | Notes |
+|---|---|
+| `title` | Max 255 characters |
+| `priority` | `high`, `medium`, or `low` |
+| `dueDate` | **`YYYY-MM-DD`**, not ISO 8601 |
+| `assignedTo.users` | Array of `{ id }`, **at least one** |
+| `creatorId` | Becomes `assignedBy` on the task |
+| `scheduledDate` | `YYYY-MM-DD`. Conditionally required — see below |
+| `customFields` | Array of `{ fieldId, type, value }` |
+| `attachments` | Array of file UUIDs |
+
+<Note>
+  The actor field here is **`creatorId`**, not `createdBy` — and on update it is **`modifierId`**, not `modifiedBy`. Only delete follows the platform convention, using `deletedBy` as a query parameter. See [Acting on Behalf of Users](/concepts/acting-as-users#task-endpoints-creatorid-modifierid).
+</Note>
+
+Response:
+
+```json
+{
+  "status": "success",
+  "message": "Task created successfully",
+  "responseTimeStamp": 1707235200000,
+  "result": {
+    "taskId": "550e8400-e29b-41d4-a716-446655440001",
+    "assignmentIds": [
+      "8b5f1e23-4a67-4c89-9d12-3e5f6a7b8c9d",
+      "9c6a2f34-5b78-5d90-0e23-4f6a7a8b9c0e"
+    ]
+  }
+}
+```
+
+**One assignment per assignee.** A task assigned to three people yields three `assignmentIds`, each tracking that person's own status and progress independently.
+
+## The `scheduledDate` trap
+
+`scheduledDate` is optional in the request schema but **required when the tenant has enabled it** as a task field. You discover that at runtime:
+
+```bash
+curl -X GET 'https://platform.app.simpplr.com/v1/b2b/task/task-fields?search=scheduledDate' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+If `scheduledDate` comes back with `isVisible: true`, supply it. Check this once per run and cache it — it is tenant configuration, not per-task state.
+
+## Updating
+
+`PATCH` is partial — send only what changes, plus `modifierId`:
+
+```bash
+curl -X PATCH 'https://platform.app.simpplr.com/v1/b2b/task/tasks/{taskId}' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "priority": "low",
+    "dueDate": "2026-02-20",
+    "modifierId": "550e8400-e29b-41d4-a716-446655440000"
+  }'
+```
+
+`creatorId` **cannot be changed** on update — the spec states so explicitly. Reassigning by sending a new `assignedTo.users` replaces the assignee set.
+
+## Deleting
+
+Soft delete, with the actor as a query parameter:
+
+```bash
+curl -X DELETE 'https://platform.app.simpplr.com/v1/b2b/task/tasks/{taskId}?deletedBy=550e8400-e29b-41d4-a716-446655440000' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+## Reading tasks
+
+Listing is **by creator**, not by assignee — `userIds` filters on who created the tasks:
+
+```bash
+curl -X GET 'https://platform.app.simpplr.com/v1/b2b/task/tasks?userIds=550e8400-e29b-41d4-a716-446655440001,550e8400-e29b-41d4-a716-446655440002&pageSize=25&includeCount=true' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+`userIds` is **required** and takes comma-separated UUIDs. Paging accepts `pageSize`/`pageToken` with `size`/`nextPageToken` as documented aliases, and `includeCount=true` adds `result.totalRecords`.
+
+<Warning>
+  **Timestamps come back as epoch milliseconds** on read — `dueDate: 1707494400000`, `createdAt`, `modifiedAt` — even though you *wrote* `dueDate` as `YYYY-MM-DD`. The read and write formats genuinely differ in this family. Convert on both edges.
+</Warning>
+
+Single task detail adds progress information the list does not carry:
+
+```bash
+curl -X GET 'https://platform.app.simpplr.com/v1/b2b/task/tasks/{taskId}' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+That response includes an overall `completionPercentage` plus a per-assignee `status` and `completionPercentage` inside `assignedTo`, and a `fieldLabels` map giving the tenant's display labels for standard fields (so a UI can honor a tenant that renamed "Due Date").
+
+## Assignments
+
+Each assignee's own thread of work — status, progress, comments, attachments:
+
+```bash
+curl -X GET 'https://platform.app.simpplr.com/v1/b2b/task/tasks/{taskId}/assignments?pageSize=25&includeCount=true' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+```json
+{
+  "result": {
+    "listOfItems": [
+      {
+        "id": "8b5f1e23-4a67-4c89-9d12-3e5f6a7b8c9d",
+        "taskId": "550e8400-e29b-41d4-a716-446655440001",
+        "userId": "55526ef2-752a-47e3-affa-2fa0eaadc5eb",
+        "status": "IN_PROGRESS",
+        "completionPercentage": 75,
+        "comments": [
+          {
+            "id": "2c4d6e8f-1a3b-5c7d-9e0f-1a2b3c4d5e6f",
+            "comment": "Working on this",
+            "createdAt": 1707200000000,
+            "createdBy": { "id": "...", "name": "Jane Smith" }
+          }
+        ],
+        "attachments": [
+          { "fileId": "...", "fileName": "draft.docx", "url": "https://..." }
+        ]
+      }
+    ],
+    "totalRecords": 5
+  }
+}
+```
+
+Note the read-only nature of this surface: the API exposes assignment progress and comments for **reading**, but there are no endpoints to update an assignment's status or post an assignment comment. Those happen in the product. Plan reporting integrations around that.
+
+## Task fields
+
+Tasks are configurable per tenant, so discover the schema rather than hard-coding it:
+
+| Endpoint | Returns |
+|---|---|
+| `GET /b2b/task/task-fields` | Paginated list of configured fields |
+| `GET /b2b/task/task-fields/{fieldIdOrKey}` | One field, by UUID **or** key (`priority`, `dueDate`, `title`) |
+| `GET /b2b/task/task-field-types` | The supported field types with labels and icons |
+
+```bash
+curl -X GET 'https://platform.app.simpplr.com/v1/b2b/task/task-fields?isStandard=false&isVisible=true' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+Filters: `isVisible`, `isStandard` (standard vs custom), `isMandatory`, `type`, and `search` over name/label.
+
+A field looks like:
+
+```json
+{
+  "id": "4ba58d96-9ac2-4820-88ef-28aa4555500d",
+  "name": "priority",
+  "type": "dropdown",
+  "typeLabel": "Dropdown",
+  "isStandard": true,
+  "isVisible": true,
+  "isMandatory": false,
+  "isFilterable": true,
+  "options": [
+    { "label": "High", "value": "high" },
+    { "label": "Medium", "value": "medium" },
+    { "label": "Low", "value": "low" }
+  ]
+}
+```
+
+Supported types: `text`, `textarea`, `date`, `number`, `dropdown`, `multi-select`, `file`.
+
+Being able to fetch a field by **key** (`GET /b2b/task/task-fields/priority`) is convenient — you can validate a value against `options` without first resolving a UUID.
+
+## Custom field values
+
+Pass custom values as an array of triples:
+
+```json
+{
+  "customFields": [
+    { "fieldId": "4ba58d96-9ac2-4820-88ef-28aa4555500d", "type": "text", "value": "Project Alpha" }
+  ]
+}
+```
+
+`value` is typed according to the field's `type`, so read the field definition first — a `multi-select` does not take a bare string.
+
+## A robust integration
+
+<Steps>
+  <Step title="Discover field configuration once per run">
+    Fetch `task-fields` and cache it. This tells you whether `scheduledDate` is required, which custom fields exist, and what `options` are legal.
+  </Step>
+  <Step title="Validate before writing">
+    Check dropdown values against `options` rather than discovering a `400` mid-batch.
+  </Step>
+  <Step title="Create with an explicit creatorId">
+    Usually a service account — see [Acting on Behalf of Users](/concepts/acting-as-users#choosing-which-user-to-name).
+  </Step>
+  <Step title="Record the assignmentIds">
+    They are how you later correlate per-person progress back to your own records.
+  </Step>
+  <Step title="Convert timestamps on both edges">
+    Write `YYYY-MM-DD`, read epoch milliseconds.
+  </Step>
+</Steps>
+
+## Family quirks, in one place
+
+| Convention | Rest of platform | Task endpoints |
+|---|---|---|
+| Create actor | `createdBy` | `creatorId` |
+| Update actor | `modifiedBy` | `modifierId` |
+| Delete actor | `deletedBy` (query) | `deletedBy` (query) — same |
+| Date write | ISO 8601 UTC | `YYYY-MM-DD` |
+| Date read | ISO 8601 UTC | Epoch milliseconds |
+| Error body | Several shapes | `error.code` + `error.ufMessage` + `error.details` |
+| Extra response field | — | `responseTimeStamp` |

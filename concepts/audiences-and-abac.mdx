@@ -1,0 +1,204 @@
+---
+title: "Audiences & ABAC"
+description: "Rule-based audiences, the condition grammar, and the fields that only exist on ABAC-enabled tenants"
+---
+
+An **audience** is a rule-defined set of people. Audiences drive who can see a site, who is subscribed to it, and who content is targeted at. On tenants with attribute-based access control (ABAC) enabled, they also organize into categories and hierarchies.
+
+## Where audiences are managed
+
+| Capability | User API | B2B API |
+|---|---|---|
+| List audiences | `GET /identity/audiences` | `GET /b2b/identity/audiences` |
+| Get one by ID | — | `GET /b2b/identity/audiences/{audienceId}` |
+| Create | — | `POST /b2b/identity/audiences` |
+| Update | — | `PATCH /b2b/identity/audiences/{audienceId}` |
+| Delete | — | `DELETE /b2b/identity/audiences/{audienceId}` |
+| Read membership | — | `GET /b2b/identity/audiences/{audienceId}/members` |
+
+Managing audiences is effectively **B2B-only** — the User API can only list them.
+
+## The rule grammar
+
+A rule is a nested tree of `AND` / `OR` groups whose leaves are conditions:
+
+```json
+{
+  "name": "UK managers",
+  "type": "mixed",
+  "rule": {
+    "AND": [
+      {
+        "AND": [
+          {
+            "values": [{ "value": "United Kingdom" }],
+            "attribute": "country",
+            "operator": "IS",
+            "fieldType": "regular"
+          }
+        ]
+      },
+      {
+        "AND": [
+          {
+            "values": [{ "value": "True" }],
+            "attribute": "isManager",
+            "operator": "IS",
+            "fieldType": "regular"
+          }
+        ]
+      }
+    ]
+  },
+  "sourceType": "app_managed"
+}
+```
+
+Each condition carries four keys:
+
+| Key | Meaning |
+|---|---|
+| `attribute` | The profile field to test |
+| `operator` | How to compare |
+| `values` | Array of `{ value, label? }` — multiple values within one condition are OR-ed |
+| `fieldType` | `regular` for profile attributes |
+
+### Operators
+
+```
+IS   IS_NOT   CONTAINS   STARTS_WITH   ENDS_WITH
+ON   ON_OR_BEFORE   ON_OR_AFTER   BEFORE   AFTER   BETWEEN
+```
+
+The date operators (`ON` through `BETWEEN`) apply to date attributes such as `start_date`. `BETWEEN` takes exactly two values, conventionally labelled:
+
+```json
+{
+  "values": [
+    { "label": "startDate", "value": "2025-11-21" },
+    { "label": "endDate", "value": "2025-12-21" }
+  ],
+  "attribute": "start_date",
+  "operator": "BETWEEN",
+  "fieldType": "regular"
+}
+```
+
+### Attributes
+
+Standard attributes include `userId`, `firstName`, `lastName`, `title`, `companyName`, `businessUnit`, `department`, `division`, `userType`, `startDate`, `isManager`, `city`, `state`, `country`.
+
+Any custom field works too, addressed by its `*__c` key — see [Custom Fields](/concepts/custom-fields#filtering-by-custom-field).
+
+<Note>
+  Attribute naming is not perfectly uniform across the platform. The B2B audience rule schema documents camelCase names (`startDate`, `isManager`, `countryName`) while several of the spec's own worked examples use snake_case (`start_date`). If a rule is rejected with `invalidAttributes`, try the other casing, and validate against `GET /b2b/identity/people-attributes` for the tenant's authoritative attribute names.
+</Note>
+
+### Boolean values are strings
+
+Note `"value": "True"` in the manager example above — condition values are strings, including booleans. Sending a JSON `true` is not the documented form.
+
+## `sourceType`
+
+| Value | Meaning |
+|---|---|
+| `app_managed` | Created and owned by an integration. **The only value accepted on create** |
+| `user_managed` | Created in the product UI |
+| `system_managed` | Platform-maintained |
+
+If you omit `sourceType` on create it is treated as `app_managed`. You cannot create a `user_managed` audience through the API.
+
+## ABAC-only fields
+
+Three fields exist only on tenants with the parent/child audience feature (ABAC) enabled:
+
+| Field | Effect |
+|---|---|
+| `parentId` | Creates this audience as a child of the given audience |
+| `categoryId` | Files the audience under an existing category folder |
+| `categoryName` | Files it under a category by name, **creating the category if it does not exist** |
+
+<Warning>
+  On a non-ABAC tenant, sending any of these returns an error — they are not silently ignored:
+
+  ```json
+  {
+    "message": "The input provided is invalid.",
+    "errors": [{
+      "message": "Invalid payload",
+      "details": "Payload must not include categoryId or parentId when parent child feature is disabled."
+    }]
+  }
+  ```
+
+  Detect the tenant's capability rather than assuming. If you support both, keep these fields behind a configuration flag.
+</Warning>
+
+Two further constraints on ABAC tenants:
+
+- **`parentId` cannot be changed on update.** The update endpoint does not accept it — only `categoryId` / `categoryName` for re-filing.
+- **Only hierarchy level 1 audiences can be moved** between categories via `categoryId` / `categoryName` on update. Moving a parent moves its children with it.
+
+## Reading membership
+
+```bash
+curl -X GET 'https://platform.app.simpplr.com/v1/b2b/identity/audiences/{audienceId}/members?pageSize=50&usersInfo=true&includeTotal=true' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+| Parameter | Effect |
+|---|---|
+| `usersInfo=true` | Return full user detail (name, city, title, department, division) |
+| `usersInfo=false` (default) | Return **only** `userId` |
+| `includeTotal=true` | Include `result.total` |
+| `searchTerm` | Filter members by name |
+
+Default to `usersInfo=false` when you only need IDs — it is a substantially smaller response for large audiences.
+
+## How audiences attach to sites and content
+
+Once an audience exists, it is referenced by ID in three distinct roles:
+
+| Field | Role |
+|---|---|
+| `targetAudience` | Who the site or content is **visible** to |
+| `subscription` | Who is automatically made a member or follower, with `accessType` and `isMandatory` |
+| `systemAudience` | Platform-derived groups — read-only on responses |
+
+`systemAudience` values you may see: `site_all_people`, `members`, `followers`, `owners_managers`, `owner`, `managers`, `content_managers`, `non_managing_members`.
+
+On a non-ABAC tenant all three arrays come back **empty** on site and content responses, which is expected rather than a failure.
+
+Updating a site's audiences uses paired add/remove arrays — `targetAudience` and `targetAudienceDeleted`, `subscription` and `subscriptionDeleted`. Removing a subscription takes an `entityAudienceId` plus `shouldUnfollowAudience`, which decides whether existing followers are detached or left in place.
+
+## Deleting an audience
+
+An audience in use cannot be deleted:
+
+```json
+{
+  "message": "The input provided is invalid.",
+  "errors": [{
+    "message": "AUDIENCE_USED_IN_USAGE: Audience used in acg groups or features"
+  }]
+}
+```
+
+Detach it from every site and content item first, then delete.
+
+## Recommended approach
+
+<Steps>
+  <Step title="Detect ABAC before you build the payload">
+    Whether `parentId` / `categoryId` / `categoryName` are legal depends on tenant configuration. Probe once and cache, or make it explicit configuration.
+  </Step>
+  <Step title="Validate attributes against people-attributes">
+    Rules referencing an unknown attribute fail with a structured `invalidAttributes` list — cheaper to check first.
+  </Step>
+  <Step title="Keep integration-owned audiences app_managed">
+    It keeps them distinguishable from audiences people curate in the product, and it is the only value create accepts anyway.
+  </Step>
+  <Step title="Page membership with usersInfo=false unless you need detail">
+    Large audiences get expensive quickly when you ask for full user records.
+  </Step>
+</Steps>

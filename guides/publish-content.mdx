@@ -1,0 +1,234 @@
+---
+title: "Publishing Content"
+description: "Create and update pages, events, and albums, and drive them through the approval lifecycle"
+---
+
+Content in Simpplr comes in three shapes — **pages**, **events**, and **albums** — all created inside a site. They share most of their request shape and differ in the fields specific to their type.
+
+## The `action` parameter drives the lifecycle
+
+Every create and update call takes a **required `action` query parameter**, and it, not the body, decides what happens to the content's state:
+
+| Endpoint | `action` values |
+|---|---|
+| Create (`POST`) | `publish`, `saveDraft` |
+| Update (`PATCH`) | `update`, `updateDraft`, `updateApprove` |
+
+```
+POST /b2b/content/sites/{siteId}/page?action=publish
+PATCH /b2b/content/sites/{siteId}/page/{contentId}?action=update
+```
+
+<Warning>
+  `action` is required and there is no default. Omitting it is a validation failure, and confusing the create values with the update values is a common mistake — `publish` is not valid on an update, and `update` is not valid on a create.
+</Warning>
+
+## Creating a page
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/b2b/content/sites/{siteId}/page?action=publish' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "contentSubType": "news",
+    "title": "Q3 results are in",
+    "bodyHtml": "<p>Revenue grew 12% quarter over quarter.</p>",
+    "publishingStatus": "immediate",
+    "category": { "id": null, "name": "Company News" },
+    "summary": "A short summary used in listings.",
+    "isFeedEnabled": true,
+    "listOfTopics": [{ "id": null, "name": "Finance" }],
+    "createdBy": "02369949-cfc1-49a7-a2a7-d03afa9af84a"
+  }'
+```
+
+Required on page create: `contentSubType`, `bodyHtml`, `publishingStatus`, `title`, `category` — plus `createdBy` on the B2B API.
+
+| Field | Values | Notes |
+|---|---|---|
+| `contentSubType` | `news`, `knowledge` | News is time-sensitive; knowledge is reference material subject to validation cycles |
+| `publishingStatus` | `immediate`, `schedule` | `schedule` **requires** `publishAt` |
+| `category` | `{ id, name }` | Pass `id: null` with a `name` to resolve or create by name |
+| `imgLayout` | `small`, `fullscreen`, `hidden`, `wide` | Featured image treatment |
+| `publishTo` | ISO 8601 UTC | Optional auto-unpublish time |
+| `isRestricted` + `targetAudience` | boolean + UUID array | Audience-restricted visibility — see [Audiences & ABAC](/concepts/audiences-and-abac) |
+
+Response:
+
+```json
+{
+  "status": "success",
+  "result": { "contentId": "49502e9f-a6e6-4773-a0b4-64be9388b7b1" },
+  "message": "Page created successfully"
+}
+```
+
+### Scheduling instead of publishing now
+
+```json
+{
+  "publishingStatus": "schedule",
+  "publishAt": "2026-01-15T09:00:00.000Z"
+}
+```
+
+`publishAt` is mandatory when `publishingStatus` is `schedule`, and must be ISO 8601 UTC. See [Platform Conventions](/concepts/conventions#timestamps).
+
+## Creating an event
+
+Events add scheduling, location, and RSVP. Required: `publishingStatus`, `title`, `bodyHtml`, `timezoneIso`, `isAllDay`, `isFeedEnabled`, `location`, `startsAt`, `endsAt` (plus `createdBy` on B2B).
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/b2b/content/sites/{siteId}/event?action=publish' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "title": "All-hands",
+    "bodyHtml": "<p>Quarterly all-hands meeting.</p>",
+    "publishingStatus": "immediate",
+    "timezoneIso": "America/Los_Angeles",
+    "isAllDay": false,
+    "isFeedEnabled": true,
+    "location": "HQ — Auditorium",
+    "startsAt": "2026-01-20T17:00:00.000Z",
+    "endsAt": "2026-01-20T18:00:00.000Z",
+    "rsvp": {
+      "dueAtDate": "2026-01-18T00:00:00.000Z",
+      "hasMaybeOption": true,
+      "capacityCount": 250
+    },
+    "listOfOrganizers": ["02369949-cfc1-49a7-a2a7-d03afa9af84a"],
+    "createdBy": "02369949-cfc1-49a7-a2a7-d03afa9af84a"
+  }'
+```
+
+Note that `timezoneIso` is an **IANA zone name** (`America/Los_Angeles`), while `startsAt` / `endsAt` are absolute UTC instants. Both are required — the zone is what the event renders in, not what the timestamps mean.
+
+`rsvp.capacityCount` accepts 1–1,000,000 or `null` for unlimited. `directions` accepts up to 10 strings.
+
+## Creating an album
+
+Albums require media up front: `publishingStatus`, `title`, `bodyHtml`, `coverImageMediaId`, and a `listOfAlbumMedia` with at least one entry.
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/b2b/content/sites/{siteId}/album?action=publish' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "title": "Summer offsite",
+    "bodyHtml": "<p>Photos from the offsite.</p>",
+    "publishingStatus": "immediate",
+    "coverImageMediaId": "87cda071-871c-4728-9051-7f61d2f9a7d2",
+    "listOfAlbumMedia": [
+      { "id": "87cda071-871c-4728-9051-7f61d2f9a7d2", "altText": "Group photo" }
+    ],
+    "isOpenToSubmissions": true,
+    "createdBy": "02369949-cfc1-49a7-a2a7-d03afa9af84a"
+  }'
+```
+
+Album media can come from `googledrive`, `box`, `onedrive`, `sharepoint`, `dropbox`, or `native_video` — see [File Uploads](/concepts/file-uploads#external-storage-providers). `coverImageMediaId` must reference one of the entries in `listOfAlbumMedia`.
+
+## Updating
+
+Updates are `PATCH` and **partial** — send only what changes, plus `modifiedBy` on B2B:
+
+```bash
+curl -X PATCH 'https://platform.app.simpplr.com/v1/b2b/content/sites/{siteId}/page/{contentId}?action=update' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "title": "Q3 results are in (revised)",
+    "modifiedBy": "02369949-cfc1-49a7-a2a7-d03afa9af84a"
+  }'
+```
+
+<Note>
+  The B2B update schema sets `minProperties: 2` — `modifiedBy` plus at least one actual change. Sending only `modifiedBy` is rejected with `At least one field must be provided for update`.
+</Note>
+
+Use `action=updateDraft` to revise without publishing, and `action=updateApprove` to update and approve in one step.
+
+## The rest of the lifecycle
+
+<AccordionGroup>
+  <Accordion title="Publish or unpublish existing content">
+```bash
+curl -X PATCH 'https://platform.app.simpplr.com/v1/b2b/content/sites/{siteId}/content/{contentId}/status' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{ "status": "publish", "modifiedBy": "<user_uuid>" }'
+```
+`status` is `publish` or `unpublish`.
+  </Accordion>
+
+  <Accordion title="Approve or reject submitted content">
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/b2b/content/sites/{siteId}/content/{contentId}/approve' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "action": "reject",
+    "rejectionComment": "Needs the updated figures.",
+    "modifiedBy": "<user_uuid>"
+  }'
+```
+`rejectionComment` (1–250 characters) is required when `action` is `reject`. Note `action` here is a **body** field, unlike the create/update query parameter.
+  </Accordion>
+
+  <Accordion title="Validate content (governance cycles)">
+```bash
+curl -X PUT 'https://platform.app.simpplr.com/v1/b2b/content/{contentId}/validate' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{ "modifiedBy": "<user_uuid>" }'
+```
+This marks knowledge content as re-validated under auto-governance. Tenant cycle length is in `autoGovernance.validationPeriodInMonths` from account config.
+  </Accordion>
+
+  <Accordion title="Delete content">
+```bash
+curl -X DELETE 'https://platform.app.simpplr.com/v1/b2b/content/sites/{siteId}/content/{contentId}?deletedBy=<user_uuid>' \
+  -H 'Authorization: Bearer <access_token>'
+```
+`deletedBy` is a **query** parameter. Deletes are soft — see [Platform Conventions](/concepts/conventions#soft-deletes).
+  </Accordion>
+</AccordionGroup>
+
+## Reading content back
+
+The two APIs differ in how they list content:
+
+| | Endpoint | Style |
+|---|---|---|
+| B2B | `GET /b2b/content/sites/contents` | Query parameters |
+| User | `POST /content/sites/content/list` | JSON request body |
+
+```bash
+curl -X GET 'https://platform.app.simpplr.com/v1/b2b/content/sites/contents?type=page&contentSubType=news&status=published&size=50&sortBy=publishedNewest' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+Useful filters: `type` (`page` / `album` / `event`), `contentSubType`, `status`, `siteId`, `topicId` (with `filter=topic`), `pageCategoryId`, `peopleId` (author), `contributionId`, `isMustRead`, `publishStartDateSpan`, `timePeriodInDays`, and `modifiedAfter` for incremental sync.
+
+`status` defaults to `published`; pass `status=all` to include drafts and pending items.
+
+For a single item, the User API offers `GET /content/sites/{siteId}/content/{contentId}`, which returns the fully hydrated object including RSVP state, must-read details, capability flags, and calendar links.
+
+## Localization
+
+Where a tenant has multiple languages enabled, several read endpoints accept `requestedLanguage` with a locale code (`fr-FR`, `hi-IN`):
+
+```bash
+curl -X GET 'https://platform.app.simpplr.com/v1/b2b/content/sites/contents?requestedLanguage=fr-FR' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+Only locales enabled for the tenant are valid — read `languages.enabled` from account config first. On write, `language` sets the content's authored language and `manualTransEnabled` / `languagesForAutoTranslation` control translation behavior.
+
+## Practical notes
+
+- **`bodyHtml` is HTML**, and responses may return body as a Tiptap JSON document string rather than the HTML you sent. Do not assume round-trip symmetry.
+- **Topics and categories resolve by name.** Passing `{ id: null, name: "Finance" }` avoids a lookup round-trip.
+- **Attach files via `listOfFiles`**, using an already-uploaded `file_id` — see [File Uploads](/concepts/file-uploads).
+- **`summary` limits differ by type**: 10,000 characters for pages and events, 255 for albums.

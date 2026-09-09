@@ -1,0 +1,226 @@
+---
+title: "Managing Sites"
+description: "Create sites, configure their features, and manage membership and roles"
+---
+
+A **site** is the container for content, files, and conversation in Simpplr. Creating one means declaring both its access model and which features it turns on.
+
+## Creating a site
+
+Site create has an unusually long required-field list, because the feature toggles have no defaults:
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/b2b/content/sites' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "Engineering",
+    "access": "public",
+    "category": { "name": "Departments", "categoryId": null },
+    "landingPage": "dashboard",
+    "isOwner": true,
+    "hasPages": true,
+    "hasEvents": true,
+    "hasAlbums": true,
+    "hasDashboard": true,
+    "isContentSubmissionsEnabled": true,
+    "isContentFeedEnabled": true,
+    "isBroadcast": false,
+    "createdBy": "02369949-cfc1-49a7-a2a7-d03afa9af84a"
+  }'
+```
+
+**All of these are required**: `name`, `access`, `category`, `isContentSubmissionsEnabled`, `isOwner`, `hasPages`, `hasEvents`, `hasAlbums`, `hasDashboard`, `landingPage`, `isBroadcast`, `isContentFeedEnabled` — plus `createdBy` on B2B.
+
+| Field | Values | Meaning |
+|---|---|---|
+| `access` | `public`, `private`, `unlisted` | Public is discoverable and joinable; private requires membership; unlisted is hidden from browse but reachable by link |
+| `landingPage` | `feed`, `dashboard`, `content`, `files`, `about` | What members see first |
+| `isBroadcast` | boolean | Broadcast-only sites restrict who can post |
+| `hasPages` / `hasEvents` / `hasAlbums` / `hasDashboard` | boolean | Feature toggles |
+| `isContentSubmissionsEnabled` | boolean | Whether non-managers can submit content for approval |
+| `isMembershipAutoApproved` | boolean | Auto-accept join requests |
+| `isQuestionAnswerEnabled` | boolean | Enable Q&A |
+
+<Note>
+  `name` is capped at **40 characters**, which is shorter than most content titles. `category.categoryId` may be `null` alongside a `name` to resolve or create the category by name.
+</Note>
+
+Response:
+
+```json
+{
+  "status": "success",
+  "result": { "siteId": "49502e9f-a6e6-4773-a0b4-64be9388b7b1" },
+  "message": "Site created successfully"
+}
+```
+
+## Updating a site
+
+Unlike content, site update is a `PUT` and expects the **full** field set — `name`, `description`, `category`, `access`, `isBroadcast`, `hasPages`, `hasEvents`, `hasAlbums`, `landingPage`, `isContentSubmissionsEnabled`, `isContentFeedEnabled`, `isContentUnfurlEnabled`, plus `modifiedBy` on B2B.
+
+```bash
+curl -X PUT 'https://platform.app.simpplr.com/v1/b2b/content/sites/{siteId}' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "Engineering",
+    "description": "Engineering team hub",
+    "category": { "id": "cc3af825-6801-4197-88f3-268e351fcba2", "name": "Departments" },
+    "access": "public",
+    "isBroadcast": false,
+    "hasPages": true,
+    "hasEvents": true,
+    "hasAlbums": true,
+    "landingPage": "dashboard",
+    "isContentSubmissionsEnabled": true,
+    "isContentFeedEnabled": true,
+    "isContentUnfurlEnabled": true,
+    "modifiedBy": "02369949-cfc1-49a7-a2a7-d03afa9af84a"
+  }'
+```
+
+<Warning>
+  Because this is a full replace, **read the site first and merge your changes** into the current state. Sending a partial body will not merge — it will fail validation on the missing required fields, or reset toggles you did not intend to touch.
+
+  Also note the field renames between create and update: `category.categoryId` becomes `category.id`, and `description` / `isContentUnfurlEnabled` are required on update but absent from create.
+</Warning>
+
+## Activating and deactivating
+
+Status is its own endpoint rather than a field on update:
+
+```bash
+curl -X PATCH 'https://platform.app.simpplr.com/v1/b2b/content/sites/{siteId}/status' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{ "status": "deactivated", "modifiedBy": "<user_uuid>" }'
+```
+
+`status` is `activated` or `deactivated`. Deactivated sites disappear from ordinary reads — pass `includeDeactivated=true` to see them.
+
+## Membership and roles
+
+One endpoint handles all membership changes, discriminated by `action`:
+
+<CodeGroup>
+
+```bash Add a person
+curl -X POST 'https://platform.app.simpplr.com/v1/b2b/content/sites/{siteId}/membership/manage' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "action": "addPeople",
+    "userId": "123e4567-e89b-12d3-a456-426614174000",
+    "permission": "member",
+    "modifiedBy": "02369949-cfc1-49a7-a2a7-d03afa9af84a"
+  }'
+```
+
+```bash Change their role
+curl -X POST 'https://platform.app.simpplr.com/v1/b2b/content/sites/{siteId}/membership/manage' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "action": "setPeoplePermission",
+    "userId": "123e4567-e89b-12d3-a456-426614174000",
+    "permission": "manager",
+    "modifiedBy": "02369949-cfc1-49a7-a2a7-d03afa9af84a"
+  }'
+```
+
+```bash Remove them
+curl -X POST 'https://platform.app.simpplr.com/v1/b2b/content/sites/{siteId}/membership/manage' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "action": "removePeople",
+    "userId": "123e4567-e89b-12d3-a456-426614174000",
+    "modifiedBy": "02369949-cfc1-49a7-a2a7-d03afa9af84a"
+  }'
+```
+
+</CodeGroup>
+
+The permitted `permission` values depend on the action:
+
+| Action | Accepted `permission` |
+|---|---|
+| `addPeople` | `member`, `follower` |
+| `setPeoplePermission` | `owner`, `manager`, `contentManager`, `member`, `follower` |
+| `removePeople` | `all`, `owner`, `manager`, `contentManager`, `member`, `follower` |
+
+<Note>
+  You cannot add someone directly as a `manager` or `owner` — add them as a `member` first, then promote with `setPeoplePermission`. On `removePeople`, the spec advises leaving `permission` empty to strip all permissions; naming a specific role removes only that role.
+</Note>
+
+### Roles, briefly
+
+| Role | Typically can |
+|---|---|
+| `owner` | Everything, including site configuration |
+| `manager` | Manage content, members, and most settings |
+| `contentManager` | Manage content but not membership |
+| `member` | Participate — read, post, and submit per site settings |
+| `follower` | Read and receive updates without membership |
+
+## Reading sites and members
+
+```bash
+# List sites (B2B — query parameters)
+curl -X GET 'https://platform.app.simpplr.com/v1/b2b/content/sites?size=50&sortBy=alphabetical&modifiedAfter=2025-04-09T18:30:00.000Z' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+`sortBy` accepts `alphabetical`, `featured`, `createdNewest`, `popular`, `updatedNewest`. `filter=featured` narrows to featured sites, and `siteIds` takes a comma-separated list for a targeted fetch.
+
+The User API uses a request body instead — `POST /content/sites/list` — with a richer `filter` enum (`following`, `member`, `manager`, `owner`, `favourites`, `recentUsedSites`, and more) because those are relative to the signed-in person.
+
+```bash
+# List members
+curl -X GET 'https://platform.app.simpplr.com/v1/b2b/content/sites/members?siteId={siteId}&roleType=manager&size=100' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+`roleType` filters by `owner`, `manager`, `content_manager`, or `member` — note these are **snake_case** here, unlike the camelCase `contentManager` used when setting permissions. Membership `status` comes back as `Active`, `Inactive`, or `Pending`.
+
+## Site categories
+
+Categories group sites and are managed independently:
+
+| Operation | Endpoint |
+|---|---|
+| List | `GET /b2b/content/site-categories` |
+| Create | `POST /b2b/content/site-categories` |
+| Update | `PUT /b2b/content/site-categories/{siteCategoryId}` |
+| Delete | `DELETE /b2b/content/site-categories/{siteCategoryId}?deletedBy=...` |
+
+`access` on a category is `all` or `app_manager`, and `name` is capped at 100 characters.
+
+## Provisioning a site end to end
+
+<Steps>
+  <Step title="Ensure the category exists">
+    Either create it up front, or pass `category: { name, categoryId: null }` on site create and let it resolve by name.
+  </Step>
+  <Step title="Create the site">
+    Supply every required toggle explicitly — there are no defaults.
+  </Step>
+  <Step title="Add owners and managers">
+    Add as `member`, then promote via `setPeoplePermission`.
+  </Step>
+  <Step title="Attach audiences (ABAC tenants)">
+    Set `targetAudience` for visibility and `subscription` for automatic membership — see [Audiences & ABAC](/concepts/audiences-and-abac#how-audiences-attach-to-sites-and-content).
+  </Step>
+  <Step title="Seed content">
+    Create pages, events, or albums — see [Publishing Content](/guides/publish-content).
+  </Step>
+</Steps>
+
+## Practical notes
+
+- **Read-modify-write on update.** `PUT` replaces; a partial body is not a patch.
+- **Watch the casing drift**: `contentManager` when writing a permission, `content_manager` when filtering members.
+- **Site names are short** — 40 characters, enforced.
+- **Deactivate rather than expecting deletion.** There is no site delete endpoint; `PATCH .../status` with `deactivated` is the retirement path.

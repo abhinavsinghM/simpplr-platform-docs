@@ -1,0 +1,111 @@
+---
+title: "Choosing an API"
+description: "The User API and B2B API differ in who they act as and what they can reach — pick before you build"
+---
+
+This is the first decision to make, because it determines your OAuth flow, the shape of your write requests, and which capabilities are available to you at all.
+
+## The core difference: who is acting
+
+**User API** — acts as **one specific signed-in person**. The person authorizes your application, you exchange that authorization for a token, and every call is evaluated as that person. If they cannot see a private site, neither can you.
+
+**B2B API** — acts as **your application, tenant-wide**. There is no human in the loop and no login; you authenticate with a client ID and secret. Because no signed-in user exists, most write endpoints require you to explicitly name the user the action should be attributed to — see [Acting on Behalf of Users](/concepts/acting-as-users).
+
+<Warning>
+  This is not just an auth difference. On the B2B API, omitting the required actor field (`createdBy`, `modifiedBy`, or `deletedBy`) is the single most common cause of a rejected first request. On the User API those fields mostly do not exist, because the token already identifies the actor.
+</Warning>
+
+## Side-by-side
+
+| | User API | B2B API |
+|---|---|---|
+| Path prefix | `/v1/...` | `/v1/b2b/...` |
+| OAuth grant | `authorization_code`, refreshed with `refresh_token` | `client_credentials` |
+| Returns a refresh token | Yes | No — request a new token when needed |
+| Scopes | `read`, `write`, `everything` | `read`, `write`, `everything` (defaults to `read`) |
+| Identity of caller | The authorizing user | Your application |
+| Actor on writes | Implied by the token | Named explicitly per request |
+| Visibility | That user's entitlements | Tenant-wide |
+| Test endpoint | — | `GET /b2b/identity/test` |
+| Operations | 67 | 75 |
+
+## Capability coverage
+
+Several areas exist in only one of the two APIs. If your use case depends on one of these, the decision is already made for you.
+
+### Only in the User API
+
+| Area | Operations | Why it's user-scoped |
+|---|---|---|
+| **Enterprise search** | 3 | Search, autocomplete, and smart answers are ranked and filtered against one person's access |
+| **Alerts** | 4 | Org alert management and targeting |
+| **Notifications** | 4 | Per-user notification inbox — create, list, action, delete |
+| **Video** | 4 | Native video tokens are minted per viewing user |
+| **People Attributes** | 3 | Profile attribute metadata and allowed-value discovery |
+
+### Only in the B2B API
+
+| Area | Operations | Why it's application-scoped |
+|---|---|---|
+| **Users** | 7 | Full user provisioning and lifecycle — create, update, deactivate |
+| **Task** | 9 | Task creation, assignment, and field configuration |
+| **Analytics** | 3 | Recurring CSV data export registration over SFTP |
+| **Audience Members** | 1 | Reading resolved audience membership |
+
+### In both
+
+| Area | User | B2B |
+|---|---|---|
+| Content | 19 | 19 |
+| Sites | 10 | 10 |
+| Feed | 11 | 11 |
+| Files | 3 | 3 |
+| Audience | 1 | 5 |
+| People | 2 | 3 |
+| Account | 1 | 1 |
+| Recognition | 1 | 1 |
+
+Where an area appears in both, the endpoints are close counterparts — but the B2B variants take actor fields and often expose more administrative reach. Audience is the clearest example: the User API can only list audiences, while the B2B API can create, read, update, delete, and read membership.
+
+## Decision guide
+
+<AccordionGroup>
+  <Accordion title="Building an app or extension a person logs into">
+    **User API.** Everything it displays should respect that person's own permissions, and you get that for free from the token. Use `authorization_code`, store the refresh token, and never ask for more scope than the app needs.
+  </Accordion>
+
+  <Accordion title="Syncing users, sites, or audiences from an HRIS or directory">
+    **B2B API.** This is provisioning work with no human present, and user creation exists only here. Expect to supply `createdBy` / `modifiedBy` on writes.
+  </Accordion>
+
+  <Accordion title="Publishing content from an external CMS or editorial tool">
+    **Either — decide by attribution.** If the content should appear authored by a specific person and that person is present to authorize, the User API is simpler. If it runs unattended on a schedule, use the B2B API and name the author via `createdBy`.
+  </Accordion>
+
+  <Accordion title="Feeding intranet knowledge into a search UI or assistant">
+    **User API.** Enterprise search and smart answers are only available there, and results must be scoped to the asking user.
+  </Accordion>
+
+  <Accordion title="Landing Simpplr activity data in a warehouse">
+    **B2B API.** Register recurring exports via the Analytics endpoints. See [Data Export](/guides/data-export).
+  </Accordion>
+
+  <Accordion title="Creating and assigning tasks programmatically">
+    **B2B API.** The Task area exists only there.
+  </Accordion>
+</AccordionGroup>
+
+## Using both
+
+Nothing prevents an integration from using both — a backend that provisions users over B2B while a companion app reads as the signed-in person over the User API. They are separate credentials and separate token flows, so treat them as two clients.
+
+## Next
+
+<Columns cols={2}>
+  <Card title="Creating the client application" icon="app-window" href="/get-started/client-application">
+    Obtain the credentials your chosen flow needs.
+  </Card>
+  <Card title="Authentication" icon="key-round" href="/authentication/overview">
+    Both token flows, with working requests.
+  </Card>
+</Columns>

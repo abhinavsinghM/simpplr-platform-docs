@@ -1,0 +1,201 @@
+---
+title: "File Uploads"
+description: "The presigned-URL upload flow, registering files against objects, and the user-photo variant"
+---
+
+Files are never posted directly to the API. Upload is a **three-step flow**: ask for a presigned URL, PUT the bytes to it, then register the resulting `file_id` against whatever object should own the file.
+
+## The flow
+
+<Steps>
+  <Step title="Request a presigned upload URL">
+    `POST /content/static/signedurl/upload` (or `/b2b/content/static/signedurl/upload`) returns a `file_id` and an `upload_url`.
+  </Step>
+  <Step title="PUT the bytes to upload_url">
+    Use `PUT`, and send **the same bearer token** you used in step 1.
+  </Step>
+  <Step title="Register the file_id">
+    Attach it to a site, content item, feed post, or user profile using the relevant endpoint. Until you do, the upload is not linked to anything.
+  </Step>
+</Steps>
+
+<Warning>
+  Two things about step 2 catch people out:
+
+  1. **The presigned URL still requires your `Authorization: Bearer` header.** This is unusual — most presigned-URL schemes are self-authenticating — but the spec is explicit that it must be invoked with the same bearer token as the request that minted it.
+  2. **Use `PUT`, not `POST`.**
+</Warning>
+
+## Step 1 — get the URL
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/b2b/content/static/signedurl/upload' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "file_name": "quarterly-report.pdf",
+    "size": 482113,
+    "mime_type": "application/pdf",
+    "alt_text": "Q3 results",
+    "uploadContext": "content-attachment",
+    "siteId": "02369949-cfc1-49a7-a2a7-d03afa9af84a",
+    "createdBy": "02369949-cfc1-49a7-a2a7-d03afa9af84a"
+  }'
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `file_name` | Yes | 1–500 characters |
+| `size` | Yes | Bytes, minimum 1. Must be the real size |
+| `createdBy` | Yes on B2B | Actor UUID — see [Acting on Behalf of Users](/concepts/acting-as-users) |
+| `mime_type` | No | Up to 100 characters |
+| `alt_text` | No | Up to 500 characters |
+| `type` | No | `bulk-ops` or `content` |
+| `uploadContext` | No | `site-feed`, `content-attachment`, `site-files`, `home-feed`, or `tiles` |
+| `siteId` | No | Target site |
+
+Response:
+
+```json
+{
+  "status": "success",
+  "result": {
+    "file_id": "644893bf-66dd-4b67-9771-76b21d91ce5c",
+    "upload_url": "https://tenant.app.simpplr.com/u/o/277b3c02-...?Content-Type=application%2Fpdf&X-Amz-Algorithm=..."
+  }
+}
+```
+
+**Keep the `file_id`.** It is the handle for every later step; the `upload_url` is disposable.
+
+## Step 2 — upload the bytes
+
+```bash
+curl -X PUT '<upload_url>' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/pdf' \
+  --data-binary '@quarterly-report.pdf'
+```
+
+Match the `Content-Type` to what you declared as `mime_type` — the presigned URL encodes it.
+
+## Step 3 — register the file
+
+What you call depends on what should own the file:
+
+<AccordionGroup>
+  <Accordion title="Attach to a site's file library">
+`POST /content/files` (or `/b2b/content/files`):
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/b2b/content/files' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "site_id": "123e4567-e89b-12d3-a456-426614174000",
+    "createdBy": "123e4567-e89b-12d3-a456-426614174000",
+    "file_id": [
+      { "provider": "intranet", "file_id": "644893bf-66dd-4b67-9771-76b21d91ce5c" }
+    ]
+  }'
+```
+
+Note that `file_id` here is an **array of objects**, not a string — each entry names a `provider` and an id.
+  </Accordion>
+
+  <Accordion title="Attach to a page, event, or album">
+Pass the file in `listOfFiles` when creating or updating the content item — see [Publishing Content](/guides/publish-content).
+  </Accordion>
+
+  <Accordion title="Attach to a feed post or comment">
+Pass it in `listOfAttachedFiles` on the feed or comment body. The object shape uses `fileId` (camelCase) here rather than `file_id` — see [Feeds & Comments](/guides/feeds-and-comments).
+  </Accordion>
+
+  <Accordion title="Use as a bulk-operation input">
+Set `type: "bulk-ops"` in step 1, then submit the `fileId` to `POST /b2b/content/sites/content/bulk-ops/{opType}`.
+  </Accordion>
+</AccordionGroup>
+
+## External storage providers
+
+Files do not have to live in Simpplr. The registration endpoints accept several providers, and the required metadata differs per provider:
+
+| `provider` | Required alongside `file_id` |
+|---|---|
+| `intranet` | Nothing — `file_id` must be a UUID |
+| `googledrive` | `name`, `size`, `type`, `version` |
+| `box`, `onedrive`, `sharepoint`, `dropbox` | `name`, `size`, `type` |
+
+`intranet` means a file you uploaded through the presigned flow above. The others reference a file that stays in the external system, so you must supply the metadata Simpplr cannot look up itself.
+
+Albums additionally accept `native_video` as a provider for video media.
+
+## The user-photo variant
+
+Profile photos and cover images use a **different endpoint** with its own constraints — `POST /b2b/identity/users/files`:
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/b2b/identity/users/files' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "useFor": "photo",
+    "userId": "123e4567-e89b-12d3-a456-426614174000",
+    "mimeType": "image/jpeg",
+    "size": 1024000
+  }'
+```
+
+| Constraint | Value |
+|---|---|
+| `useFor` | `photo` or `coverImage` |
+| Accepted MIME types | `image/png`, `image/jpg`, `image/jpeg`, `image/gif` |
+| `photo` size limit | 2,097,152 bytes (2 MB) |
+| `coverImage` size limit | 4,194,304 bytes (4 MB) |
+| Recommended `photo` dimensions | Square, ideally 200 × 200 |
+| Recommended `coverImage` dimensions | 746 × 304 |
+| **URL validity** | **5 minutes** |
+
+Then complete the association with a user update — this endpoint does **not** set the photo by itself:
+
+```bash
+curl -X PATCH 'https://platform.app.simpplr.com/v1/b2b/identity/users/{userId}' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{ "photoFileId": "27275ee6-d56f-4e52-bc40-a44229d83c86" }'
+```
+
+Use `photoFileId` for a profile photo and `coverImageFileId` for a cover image. `PATCH` is preferable to `PUT` here, since `PUT` on a user requires the full field set.
+
+<Warning>
+  The 5-minute window on user-photo upload URLs is much tighter than it looks. Request the URL immediately before uploading — not at the start of a long batch job that processes photos later.
+</Warning>
+
+## Reading files back
+
+`POST /content/files/list` (or `/b2b/content/files/list`) searches files across scopes:
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/b2b/content/files/list' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "siteId": "d096db67-954a-4ff5-94a7-ccc437f2fd81",
+    "size": 50,
+    "sortBy": "createdNewest",
+    "extensions": ["pdf", "docx"]
+  }'
+```
+
+Scope it by `siteId`, `contentId`, `directory`, or a specific `id`. `extensions` takes up to 20 unique extensions — **without leading dots** (`pdf`, not `.pdf`).
+
+Responses carry both plain and signed URLs (`downloadUrl` / `signedDownloadUrl`, `thumbnailImg` / `signedThumbnailImg`, `previewUrl` / `signedPreviewUrl`) plus per-file capability flags such as `canDownload`, `canDelete`, and `canCreateNewVersion`. Prefer the signed variants when rendering to a user, and respect the capability flags rather than assuming.
+
+## Checklist
+
+- Send the real byte `size` in step 1 — it is validated.
+- `PUT`, not `POST`, in step 2.
+- Keep the `Authorization` header on the presigned URL.
+- Register the `file_id`, or the upload is orphaned.
+- Note the field-name shift: `file_id` on file registration, `fileId` on feed attachments.
+- Request user-photo URLs just-in-time; they expire in 5 minutes.

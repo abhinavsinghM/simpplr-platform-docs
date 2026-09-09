@@ -1,0 +1,147 @@
+---
+title: "Making Your First Request"
+description: "Get a token, call the test endpoint, and read your first response"
+---
+
+This walks the shortest path from credentials to a confirmed working integration. The examples use the B2B API because it has a purpose-built test endpoint; the User API equivalent is noted at each step.
+
+## 1. Get an access token
+
+<CodeGroup>
+
+```bash B2B API
+curl -X POST 'https://platform.app.simpplr.com/v1/identity/oauth/token' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "grant_type": "client_credentials",
+    "client_id": "<your_client_id>",
+    "client_secret": "<your_client_secret>",
+    "scope": "everything"
+  }'
+```
+
+```bash User API
+curl -X POST 'https://platform.app.simpplr.com/v1/identity/oauth/token' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "grant_type": "authorization_code",
+    "client_id": "<your_client_id>",
+    "client_secret": "<your_client_secret>",
+    "auth_code": "<authorization_code>"
+  }'
+```
+
+</CodeGroup>
+
+The B2B response carries an access token:
+
+```json
+{ "access_token": "<access_token>" }
+```
+
+The User API response carries both an access token and a refresh token, because a user session is expected to outlive a single token:
+
+```json
+{
+  "access_token": "<access_token>",
+  "refresh_token": "<refresh_token>"
+}
+```
+
+<Warning>
+  On the B2B call, `scope` is optional and **defaults to `read`**. If your integration writes anything, set it explicitly to `write` or `everything` — otherwise the token issues successfully and every write fails afterward.
+</Warning>
+
+Full detail, including refreshing a User API token: [Authentication](/authentication/overview).
+
+## 2. Confirm it works
+
+The B2B API includes a test endpoint whose only job is to prove your integration is correctly wired:
+
+```bash
+curl -X GET 'https://platform.app.simpplr.com/v1/b2b/identity/test' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+```json
+{
+  "status": "SUCCESS",
+  "result": {},
+  "message": "Integration with Extensibility Center B2B content management APIs is successful"
+}
+```
+
+If instead you get a `401`, the token is missing, malformed, or expired. A `403` means the token is valid but the call was not permitted — most often a scope that is narrower than the operation requires. See [Errors](/concepts/errors#401-vs-403).
+
+On the User API there is no dedicated test endpoint; a cheap read such as `GET /account/config` serves the same purpose:
+
+```bash
+curl -X GET 'https://platform.app.simpplr.com/v1/account/config' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+## 3. Read a real response
+
+Fetch the tenant's account configuration. By default this returns a deliberately small payload — the `fields` parameter controls how much you get back:
+
+```bash
+curl -X GET 'https://platform.app.simpplr.com/v1/b2b/account/config?fields=appName,languages' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+```json
+{
+  "status": 200,
+  "message": "SUCCESS",
+  "result": {
+    "appName": "Acme Intranet",
+    "languages": {
+      "enabled": ["en-US"],
+      "default": "en-US",
+      "allowed": ["en-US", "en-GB", "fr-FR", "de-DE", "..."]
+    }
+  }
+}
+```
+
+Three things to notice, because they hold across the whole platform:
+
+1. **The payload is wrapped.** Your data is under `result`, not at the top level. See [Platform Conventions](/concepts/conventions#the-response-envelope).
+2. **Responses are opt-in wide.** `fields` defaults to `minimal` here; passing `all` or a comma-separated list widens it. Several endpoints follow this "ask for what you need" pattern.
+3. **An unsupported value is a `400`, not a silent ignore.** Passing an unknown field name to `fields` fails validation rather than returning a partial result.
+
+## 4. Make a write call
+
+Writes on the B2B API need one extra thing: the user the action is attributed to. Creating a site category is a compact example:
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/b2b/content/site-categories' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "Engineering",
+    "access": "all",
+    "createdBy": "a40cf504-b39f-4219-8d96-11ba48f7cced"
+  }'
+```
+
+`createdBy` is **required** — the B2B API has no signed-in user to attribute the action to, so you name one. Thirteen B2B endpoints require `createdBy`, thirteen require `modifiedBy`, and six require `deletedBy` as a query parameter. The equivalent User API call omits it entirely, because the token already identifies the actor.
+
+This is the single biggest difference in day-to-day use between the two APIs — [Acting on Behalf of Users](/concepts/acting-as-users) covers it properly.
+
+## Next
+
+<Columns cols={2}>
+  <Card title="Platform Conventions" icon="ruler" href="/concepts/conventions">
+    Envelopes, identifiers, timestamps, and base URLs.
+  </Card>
+  <Card title="Acting on Behalf of Users" icon="user-check" href="/concepts/acting-as-users">
+    The actor-field rule, endpoint by endpoint.
+  </Card>
+  <Card title="Pagination" icon="list" href="/concepts/pagination">
+    Token-based paging and its per-family variations.
+  </Card>
+  <Card title="Errors" icon="triangle-alert" href="/concepts/errors">
+    The error body shapes you need to parse defensively.
+  </Card>
+</Columns>

@@ -1,0 +1,228 @@
+---
+title: "Enterprise Search"
+description: "Search across connected systems, drive an autocomplete box, and generate AI smart answers"
+---
+
+<Info>
+  Enterprise search is **User API only**. Results are ranked and filtered against the authorizing person's own access, which is why there is no B2B equivalent. See [Choosing an API](/get-started/choosing-an-api#only-in-the-user-api).
+</Info>
+
+Three endpoints serve three different UI moments:
+
+| Endpoint | Use |
+|---|---|
+| `POST /enterprise-search/search` | The full results page |
+| `POST /enterprise-search/autocomplete` | The dropdown as someone types |
+| `POST /enterprise-search/smartanswers` | An AI-generated answer with citations |
+
+These endpoints use a **different response envelope** from the rest of the platform — `success` / `status_code` / `correlation_id` / `data` rather than `status` / `message` / `result`. Handle them separately in your client. See [Errors](/concepts/errors#the-400-shapes).
+
+## Searching
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/enterprise-search/search' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "search_term": "expense policy",
+    "page_size": 20,
+    "caller_context": "global_search",
+    "conversation_id": "5e9e42603e5d337ec8486d24cca3eb31",
+    "filters": {
+      "connector_type": ["zeus", "confluence"],
+      "object_type": ["content", "file"]
+    },
+    "sort_by": "relevance",
+    "sort_by_order": "desc"
+  }'
+```
+
+Note these endpoints use **snake_case** field names, unlike the camelCase used across the rest of the platform.
+
+| Field | Notes |
+|---|---|
+| `search_term` | The query |
+| `page_size` | Maximum **50** |
+| `page_token` | From the previous response's `next_page_token` |
+| `caller_context` | `global_search` to start a thread, `follow_up_search` for a follow-up in the same thread |
+| `conversation_id` | Ties follow-ups together; one user may have several concurrent threads |
+| `sort_by` | `name` or `relevance` (autocomplete also accepts `recency`) |
+| `sort_by_order` | `asc` or `desc` |
+
+### Connectors
+
+`filters.connector_type` restricts which systems are searched:
+
+```
+odin   zeus   google_drive   confluence   sharepoint_online   onedrive   servicenow
+```
+
+`zeus` is Simpplr's own intranet content; the rest are external systems the tenant has connected. Which are available depends on tenant configuration — an unconfigured connector simply returns nothing rather than erroring.
+
+### Object types
+
+`filters.object_type` restricts what kind of thing matches:
+
+```
+people   site   site_role   content   tiles   link   feed   feed_comment
+file     file_raptor   native_video   campaign
+```
+
+`filters.curated_object_types` is a higher-level alternative that expands into object types plus MIME-type constraints — useful when a UI offers "Documents" or "Videos" as a filter rather than raw object types:
+
+```
+video   page   album   event   blog   document   presentation
+spreadsheet   audio   markup   file   site_tile   home_tile
+```
+
+### Scoping filters
+
+Several filters narrow by container or attribute, and the spec notes they are intended to be combined with `object_type`:
+
+| Filter | Combine with |
+|---|---|
+| `simpplr_site_ids` | `object_type` |
+| `confluence_space_ids` | `connector_type` |
+| `people_manager_ids` | `object_type: ["people"]` — finds a manager's reports |
+| `simpplr_people_department_ids` | `object_type: ["people"]` |
+| `simpplr_people_expertise_ids` | `object_type: ["people"]` |
+| `simpplr_people_location_ids` | `object_type: ["people"]` |
+| `owner_ids` | Any — document owners |
+| `date_range` | `{ start_date, end_date }` |
+
+### Reading the response
+
+```json
+{
+  "success": true,
+  "status_code": 200,
+  "correlation_id": "...",
+  "data": {
+    "list_items": [
+      {
+        "relevancy_score": 12.4,
+        "item": {
+          "id": "...",
+          "connector_type": "confluence",
+          "object_type": "page",
+          "title": "Expense policy",
+          "url": "https://...",
+          "excerpt": "...",
+          "created_at": "2025-01-01T00:00:00.000Z",
+          "updated_at": "2025-02-01T00:00:00.000Z"
+        }
+      }
+    ],
+    "has_more": true,
+    "next_page_token": "...",
+    "aggregations": {
+      "total": 42,
+      "connectors": {
+        "confluence": { "total": 12, "object_types": { "page": { "total": 12 } } }
+      }
+    }
+  }
+}
+```
+
+Two useful properties: `has_more` gives you an explicit end-of-results signal (rather than inferring it from a missing token), and `aggregations` gives per-connector and per-object-type counts you can render as facet counts without a second query.
+
+<Warning>
+  `relevancy_score` is an uncalibrated magnitude, not a confidence or a percentage. Use it for ordering only — do not display it as a quality score or apply a fixed threshold to it.
+</Warning>
+
+## Autocomplete
+
+Same request shape, minus the conversation fields, and tuned for latency:
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/enterprise-search/autocomplete' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "search_term": "expen",
+    "page_size": 8,
+    "sort_by": "relevance"
+  }'
+```
+
+It accepts the same `filters` and returns the same response shape as search. `sort_by` additionally accepts `recency`.
+
+Debounce input client-side — roughly 150–250 ms after the last keystroke — and cancel in-flight requests when the term changes, rather than firing per character.
+
+## Smart answers
+
+Generates a synthesized answer with the sources it used:
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/enterprise-search/smartanswers' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "search_term": "how many vacation days do I get",
+    "caller_context": "global_search",
+    "conversation_id": "5e9e42603e5d337ec8486d24cca3eb31"
+  }'
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "show_smart_answer": true,
+    "skipped_answer_generation": false,
+    "document_analysed_count": 7,
+    "smart_answer": "Full-time employees accrue 20 days per year...",
+    "references": [
+      {
+        "id": "...",
+        "augmented_text": "...",
+        "relevancy_score": 9.1,
+        "source": { "connector_type": "zeus", "object_type": "content", "url": "...", "name": "..." },
+        "chunks": []
+      }
+    ],
+    "conversation_id": "..."
+  }
+}
+```
+
+Three flags govern whether you should render anything:
+
+| Field | Meaning |
+|---|---|
+| `show_smart_answer` | Whether an answer should be displayed at all |
+| `skipped_answer_generation` | Generation was deliberately skipped for this query |
+| `document_analysed_count` | How many documents informed the answer |
+
+<Warning>
+  **Honor `show_smart_answer` and `skipped_answer_generation`.** Rendering `smart_answer` regardless of them will surface answers the platform decided not to stand behind. Always display the `references` alongside the answer so people can verify it.
+</Warning>
+
+An optional `search_token` from a prior search call can be passed to tie the answer to that search.
+
+## Conversation threading
+
+Search and smart answers are conversational. The pattern:
+
+<Steps>
+  <Step title="First query">
+    Send `caller_context: "global_search"` and generate a fresh `conversation_id`.
+  </Step>
+  <Step title="Follow-up in the same thread">
+    Send `caller_context: "follow_up_search"` with the **same** `conversation_id`, so the platform interprets the query in context.
+  </Step>
+  <Step title="New topic">
+    Start a new `conversation_id`. One user may have several live threads at once.
+  </Step>
+</Steps>
+
+Generate `conversation_id` yourself — the examples show a 32-character hex string — and keep it for the life of the thread.
+
+## Practical notes
+
+- **snake_case and a different envelope** — these endpoints do not follow platform-wide conventions.
+- **`page_size` caps at 50.**
+- **Results are per-user.** Two people running the same query legitimately get different results; that is entitlement, not inconsistency.
+- **Use `aggregations` for facet counts** instead of issuing extra queries.
+- **Never treat `relevancy_score` as a confidence percentage.**

@@ -1,0 +1,174 @@
+---
+title: "Acting on Behalf of Users"
+description: "Why B2B writes name an actor explicitly, and the exact field each endpoint expects"
+---
+
+This is the biggest practical difference between the two APIs, and the most common cause of a rejected first B2B request.
+
+## Why it exists
+
+On the **User API**, the access token belongs to a person. When you publish a page, the platform knows who authored it because the token says so.
+
+On the **B2B API** there is no person — the token belongs to your application. So the platform cannot infer who a created page belongs to, whose name appears on a feed post, or who approved a piece of content. **You name them.**
+
+```json
+{
+  "name": "Engineering",
+  "access": "all",
+  "createdBy": "a40cf504-b39f-4219-8d96-11ba48f7cced"
+}
+```
+
+<Warning>
+  The named user is not cosmetic. The action is **attributed** to them in the product, and it is **evaluated against their permissions**. Naming a user who lacks rights to the operation returns `403` — the application's token does not override the actor's permissions.
+</Warning>
+
+## The four field names
+
+Which field you send depends on the operation and, for tasks, on the endpoint family:
+
+| Field | Sent as | Used by |
+|---|---|---|
+| `createdBy` | Request body | Create operations |
+| `modifiedBy` | Request body | Update, status change, approve/reject, membership |
+| `deletedBy` | **Query parameter** | Delete operations |
+| `creatorId` / `modifierId` | Request body | Task create / update only |
+
+<Note>
+  `deletedBy` is a **query parameter**, not a body field — because these are `DELETE` requests. Sending it in a body is the classic first mistake here. The Task endpoints are also inconsistent with the rest of the platform, using `creatorId` and `modifierId` where everything else uses `createdBy` and `modifiedBy`.
+</Note>
+
+## Complete endpoint reference
+
+35 B2B operations take an actor field. This is the full list.
+
+### Requires `createdBy` (body)
+
+| Operation |
+|---|
+| `POST /b2b/content/sites` |
+| `POST /b2b/content/sites/{siteId}/page` |
+| `POST /b2b/content/sites/{siteId}/event` |
+| `POST /b2b/content/sites/{siteId}/album` |
+| `POST /b2b/content/site-categories` |
+| `POST /b2b/content/sites/{site_id}/page-categories` |
+| `POST /b2b/content/files` |
+| `POST /b2b/content/static/signedurl/upload` |
+| `POST /b2b/content/sites/content/bulk-ops/{opType}` |
+| `POST /b2b/wfeed/feeds` |
+| `POST /b2b/wfeed/feeds/{feedId}/comments` |
+| `POST /b2b/wfeed/feeds/{feedId}/reactions` |
+
+### Requires `modifiedBy` (body)
+
+| Operation |
+|---|
+| `PUT /b2b/content/sites/{siteId}` |
+| `PATCH /b2b/content/sites/{siteId}/status` |
+| `PATCH /b2b/content/sites/{siteId}/page/{contentId}` |
+| `PATCH /b2b/content/sites/{siteId}/event/{contentId}` |
+| `PATCH /b2b/content/sites/{siteId}/album/{contentId}` |
+| `PATCH /b2b/content/sites/{siteId}/content/{contentId}/status` |
+| `POST /b2b/content/sites/{siteId}/content/{contentId}/approve` |
+| `POST /b2b/content/sites/{siteId}/membership/manage` |
+| `PUT /b2b/content/site-categories/{siteCategoryId}` |
+| `PUT /b2b/content/sites/{site_id}/page-categories/{category_id}` |
+| `PUT /b2b/content/{contentId}/{action}` |
+| `PUT /b2b/wfeed/feeds/{feedId}` |
+| `PUT /b2b/wfeed/feeds/{feedId}/comments/{commentId}` |
+
+### Requires `deletedBy` (query parameter)
+
+| Operation |
+|---|
+| `DELETE /b2b/content/sites/{siteId}/content/{contentId}` |
+| `DELETE /b2b/content/site-categories/{siteCategoryId}` |
+| `DELETE /b2b/content/sites/{site_id}/page-categories/{category_id}` |
+| `DELETE /b2b/wfeed/feeds/{feedId}` |
+| `DELETE /b2b/wfeed/feeds/{feedId}/comments/{commentId}` |
+| `DELETE /b2b/task/tasks/{taskId}` |
+
+### Task endpoints — `creatorId` / `modifierId`
+
+| Operation | Field |
+|---|---|
+| `POST /b2b/task/tasks` | `creatorId` (becomes `assignedBy`) |
+| `PATCH /b2b/task/tasks/{taskId}` | `modifierId` (becomes `modifiedBy`) |
+| `DELETE /b2b/task/tasks/{taskId}` | `deletedBy` (query) |
+
+<Note>
+  On task update, `creatorId` cannot be changed — the spec states it explicitly. Only `modifierId` is accepted there.
+</Note>
+
+### Optional actor filters (reads)
+
+Two read endpoints accept an actor-shaped parameter as a **filter**, not an attribution:
+
+| Operation | Field | Meaning |
+|---|---|---|
+| `GET /b2b/content/sites/contents` | `requestedBy` | Required only when `reportType` is set — identifies who requested the bulk report |
+| `GET /b2b/rfeed/feeds/{feedId}/reactions` | `createdBy` | Filter reactions to those by one user |
+
+## Examples
+
+<CodeGroup>
+
+```bash Create (createdBy in body)
+curl -X POST 'https://platform.app.simpplr.com/v1/b2b/content/sites/{siteId}/page?action=publish' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "contentSubType": "news",
+    "title": "Quarterly update",
+    "bodyHtml": "<p>Results are in.</p>",
+    "publishingStatus": "immediate",
+    "category": { "id": null, "name": "Company News" },
+    "createdBy": "02369949-cfc1-49a7-a2a7-d03afa9af84a"
+  }'
+```
+
+```bash Update (modifiedBy in body)
+curl -X PATCH 'https://platform.app.simpplr.com/v1/b2b/content/sites/{siteId}/page/{contentId}?action=update' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "title": "Quarterly update (revised)",
+    "modifiedBy": "02369949-cfc1-49a7-a2a7-d03afa9af84a"
+  }'
+```
+
+```bash Delete (deletedBy in query)
+curl -X DELETE 'https://platform.app.simpplr.com/v1/b2b/content/sites/{siteId}/content/{contentId}?deletedBy=e0853f94-c46d-41ca-89e1-5550a3638490' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+```bash Task create (creatorId)
+curl -X POST 'https://platform.app.simpplr.com/v1/b2b/task/tasks' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "title": "Complete quarterly report",
+    "priority": "high",
+    "dueDate": "2026-02-15",
+    "assignedTo": { "users": [{ "id": "24a16040-5960-4f23-9846-ece10ace0498" }] },
+    "creatorId": "9a736d37-4337-4f77-b177-deb3efcfd190"
+  }'
+```
+
+</CodeGroup>
+
+## Choosing which user to name
+
+The actor should be a real, active user whose identity makes sense for the action, because it is what people will see in the product.
+
+- **A service or integration account** is the cleanest choice for automated content, provisioning, and scheduled jobs. Attribution stays honest — the intranet shows that an integration did this, not a colleague who was asleep at the time.
+- **The originating human**, when your upstream system knows who triggered the action (an editor publishing from an external CMS, for example). This gives correct authorship in the product.
+- **Never a deactivated or deleted user.** Expect the operation to fail rather than degrade.
+
+Whichever you choose, that user needs the permissions for the operation — a service account publishing to a site must be able to publish to that site.
+
+## Practical notes
+
+- **Resolve and cache user IDs.** These fields take UUIDs, not emails or usernames. If your upstream system keys on email, resolve to a Simpplr user ID once and cache it rather than looking it up per call. `GET /b2b/identity/users` supports `fields`, `modifiedAfter`, and `employeeNumber` filters for building that map.
+- **Do not send actor fields to the User API.** They are largely absent there; the token already identifies the actor. The one exception is an optional `createdBy` on `POST /wfeed/feeds/{feedId}/reactions`, which defaults to the logged-in user.
+- **A missing actor field is a `400`, not a default.** The platform will not silently substitute an application identity.

@@ -1,0 +1,187 @@
+---
+title: "Data Export"
+description: "Register recurring CSV exports of Simpplr activity data, delivered over SFTP"
+---
+
+<Info>
+  Data export is **B2B API only** — 3 operations under the Analytics tag. See [Choosing an API](/get-started/choosing-an-api#only-in-the-b2b-api).
+</Info>
+
+This is not a query API. You **register a configuration once**, and the platform then delivers CSV files to an SFTP-accessible location on a schedule. It is the intended path for landing Simpplr activity data in a warehouse.
+
+## How it works
+
+<Steps>
+  <Step title="Register the entities you want">
+    `POST /b2b/analytics/export` with the entity list and a frequency. This is typically a one-time setup.
+  </Step>
+  <Step title="First delivery is a full load">
+    The first export for each registered entity contains **complete historical data**.
+  </Step>
+  <Step title="Subsequent deliveries are deltas">
+    Later exports carry only records from the previous period, keeping file sizes manageable.
+  </Step>
+  <Step title="Read the files from SFTP">
+    Files land partitioned by date — see [File layout](#file-layout).
+  </Step>
+</Steps>
+
+No further API calls are needed once registered; the schedule runs on its own.
+
+## Registering
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/b2b/analytics/export' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "exportOption": "export selected",
+    "entityList": ["user", "content", "user logins", "interaction"],
+    "frequency": "daily"
+  }'
+```
+
+| Field | Values | Notes |
+|---|---|---|
+| `exportOption` | `export all`, `export selected`, `disable export` | Defaults to `export selected` |
+| `entityList` | Entity display names | Required when `exportOption` is `export selected`. Array or comma-separated string |
+| `frequency` | `daily`, `weekly`, `monthly` | Defaults to `daily`. Weekly runs Monday; monthly runs on the 1st |
+
+<Warning>
+  **Registration has replace semantics.** Each call replaces your *entire* export configuration — entities present in the request become the active set, and any previously registered entity **not** in the request is deactivated.
+
+  To add one entity without disturbing the others, `GET` the current configuration first, append to that list, and submit the full updated set. A naive "register one more entity" call will silently switch off everything else.
+</Warning>
+
+## Entity names
+
+Entities use **human-readable display names**, not table names — `user logins`, not `user_login_events`. All 26 supported values:
+
+| | | |
+|---|---|---|
+| `user` | `user logins` | `site` |
+| `site category` | `content` | `comment` |
+| `feed` | `file` | `interaction` |
+| `must reads` | `theme` | `section instance` |
+| `newsletter` | `newsletter interaction` | `newsletter category` |
+| `survey response` | `survey recipient` | `survey instance` |
+| `survey instance question` | `survey question bank` | `survey question answer bank` |
+| `sentiment check configuration` | `sentiment check response` | `awareness check question` |
+| `awareness check option` | `awareness check response` | |
+
+Names with spaces are used verbatim — `"must reads"`, `"awareness check response"`.
+
+## Reading the current configuration
+
+```bash
+curl -X GET 'https://platform.app.simpplr.com/v1/b2b/analytics/export?includeInactive=true' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+```json
+{
+  "status": "success",
+  "message": "Registered data export requests returned successfully.",
+  "result": {
+    "nextPageToken": "",
+    "listOfItems": [
+      {
+        "tenant_code": "T1",
+        "entity": "user",
+        "grouped_by": "tenant_code",
+        "is_active": true,
+        "frequency": "daily",
+        "columns_list": null,
+        "registered_at": "2025-04-01T10:00:00.000Z",
+        "updated_at": "2025-04-01T10:00:00.000Z"
+      }
+    ]
+  }
+}
+```
+
+One row per registered entity. By default only **active** entries are returned — `includeInactive=true` also shows previously registered entities that have since been deactivated, which is what you want for auditing or re-enabling.
+
+<Note>
+  These fields are **snake_case** (`tenant_code`, `is_active`, `registered_at`), unlike the camelCase used across most of the platform.
+</Note>
+
+## File layout
+
+Delivered files are partitioned by date:
+
+```
+/exports/<tenant-id>/<year>/<month>/<day>/<entity>/<entity>.csv
+```
+
+So a daily `user` export for 15 January 2026 arrives as:
+
+```
+/exports/<tenant-id>/2026/01/15/user/user.csv
+```
+
+Because the path is date-partitioned, an ingestion job can walk forward by date rather than tracking cursors. Idempotency is worth building in — reprocessing a partition should be safe, since a re-requested full load will overwrite the same day's path.
+
+## Requesting a fresh full load
+
+When you need complete history again — after a data correction, a schema change on your side, or a broken backfill — request a full-history refresh for entities you **already** export:
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/b2b/analytics/export-full-load' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "exportOption": "export selected",
+    "entityList": ["survey response", "survey instance"]
+  }'
+```
+
+The **next scheduled run** for those entities then carries full history instead of a delta. It does not trigger an immediate export.
+
+| Behavior | Detail |
+|---|---|
+| `export all` | Applies to every currently active export; omit `entityList` |
+| `export selected` | Only the named entities — each must already be in your active configuration |
+| Naming an unregistered entity | `400` validation error |
+| `export all` with no active exports | `404` |
+
+```json
+{
+  "status": "success",
+  "message": "Full-history export refresh queued for the selected entities.",
+  "result": {
+    "entities": ["survey response", "survey instance"],
+    "count": 2,
+    "status": "full_load_queued"
+  }
+}
+```
+
+## Disabling exports
+
+```bash
+curl -X POST 'https://platform.app.simpplr.com/v1/b2b/analytics/export' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{ "exportOption": "disable export" }'
+```
+
+This deactivates all exports for the tenant. The registrations remain visible via `includeInactive=true`, so re-enabling later means re-registering the entities you want rather than starting from nothing.
+
+## Choosing a frequency
+
+| Frequency | Delivered | Suits |
+|---|---|---|
+| `daily` | Every day | Dashboards and operational reporting |
+| `weekly` | Every Monday | Weekly business reviews |
+| `monthly` | 1st of the month | Long-horizon trend analysis |
+
+Frequency is set per registration call and applies to the whole configuration, not per entity. If different entities genuinely need different cadences, that is not expressible here — pick the finest cadence you need and downsample downstream.
+
+## Practical notes
+
+- **Always read before you write.** Replace semantics make blind registration destructive.
+- **First run is heavy.** A full load of `content`, `interaction`, or `user logins` on a large tenant is substantially bigger than the steady-state delta. Plan the first ingestion accordingly.
+- **`columns_list` may be `null`**, meaning the default column set for that entity.
+- **Confirm SFTP access separately.** The endpoint registers *what* and *how often*; where the files land and how you authenticate to that location is provisioned outside this API — arrange it with your Simpplr contact.
+- **A full-load request affects the next scheduled run**, not an immediate delivery — so a Monday-weekly export requested on Tuesday arrives the following Monday.

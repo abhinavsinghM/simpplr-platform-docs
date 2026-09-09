@@ -1,0 +1,61 @@
+---
+title: "Simpplr Extensibility Center"
+description: "Build custom workflows and integrations on top of the Simpplr platform"
+---
+
+The Extensibility Center is the developer surface of the Simpplr platform. It exposes the same intranet primitives your users work with in the product — sites, content, feeds, files, people, tasks, search — as REST APIs you can build against.
+
+Use it to centralize workplace applications inside Simpplr, push and pull data between Simpplr and your other systems, and automate work that would otherwise be manual.
+
+<Columns cols={2}>
+  <Card title="Get Started" icon="rocket" href="/get-started/overview">
+    What you can build, what you need before you start, and how the pieces fit together.
+  </Card>
+  <Card title="Choose an API" icon="git-compare" href="/get-started/choosing-an-api">
+    The User API and the B2B API solve different problems. Pick the right one first.
+  </Card>
+  <Card title="Authentication" icon="key-round" href="/authentication/overview">
+    OAuth 2.0 token flows for both APIs, with working requests.
+  </Card>
+  <Card title="Make your first call" icon="terminal" href="/get-started/first-request">
+    Get a token, hit the test endpoint, and confirm your integration works.
+  </Card>
+</Columns>
+
+## Two APIs, one platform
+
+| | [User API](/authentication/user-tokens) | [B2B API](/authentication/b2b-tokens) |
+|---|---|---|
+| Acts as | A specific signed-in person | Your application, tenant-wide |
+| OAuth grant | `authorization_code` (+ `refresh_token`) | `client_credentials` |
+| Sees | Only what that person is entitled to see | Tenant-wide, subject to the actor you name |
+| Typical use | An app or extension acting for a logged-in user | Backend sync, provisioning, scheduled jobs |
+| Operations | 67 across 14 areas | 75 across 13 areas |
+
+Both are documented endpoint-by-endpoint in the **User API** and **B2B API** tabs above. See [Choosing an API](/get-started/choosing-an-api) for the full capability comparison — several areas exist in only one of the two.
+
+## Where to start
+
+<Steps>
+  <Step title="Decide which API you need">
+    [Choosing an API](/get-started/choosing-an-api) — this determines your auth flow and what you can call.
+  </Step>
+  <Step title="Get credentials">
+    [Creating the client application](/get-started/client-application) — you need a `client_id` and `client_secret` before anything else.
+  </Step>
+  <Step title="Get a token and call the test endpoint">
+    [Making your first request](/get-started/first-request) — confirms credentials, scope, and connectivity in one round trip.
+  </Step>
+  <Step title="Learn the platform-wide conventions">
+    [Core Concepts](/concepts/conventions) — response envelopes, pagination, error shapes, custom fields, and the actor-field rule that trips up most first B2B integrations.
+  </Step>
+</Steps>
+
+## Conventions that apply everywhere
+
+Before you write much code, four things are worth knowing up front:
+
+- Every response is wrapped in a **`status` / `message` / `result` envelope** rather than returning the object directly — see [Platform Conventions](/concepts/conventions).
+- **Pagination is token-based**, but the parameter names vary by endpoint family — see [Pagination](/concepts/pagination).
+- **Error bodies come in several shapes** across endpoint families, so parse defensively — see [Errors](/concepts/errors).
+- On the **B2B API, most writes require you to name the acting user** (`createdBy`, `modifiedBy`, `deletedBy`). There is no signed-in user to infer it from — see [Acting on Behalf of Users](/concepts/acting-as-users).

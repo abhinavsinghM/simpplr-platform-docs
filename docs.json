@@ -1,0 +1,98 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Simpplr Extensibility Center",
+  "description": "Build custom workflows and integrations on the Simpplr platform with the User API and B2B API.",
+  "colors": {
+    "primary": "#2E5BFF",
+    "light": "#6E8FFF",
+    "dark": "#1E3FB8"
+  },
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg"
+  },
+  "favicon": "/logo/favicon.svg",
+  "icons": {
+    "library": "lucide"
+  },
+  "metadata": {
+    "timestamp": true
+  },
+  "contextual": {
+    "options": [
+      "copy",
+      "view",
+      "assistant",
+      "mcp",
+      "add-mcp"
+    ]
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "index",
+              "get-started/overview",
+              "get-started/choosing-an-api",
+              "get-started/client-application",
+              "get-started/first-request"
+            ]
+          },
+          {
+            "group": "Authentication",
+            "pages": [
+              "authentication/overview",
+              "authentication/user-tokens",
+              "authentication/b2b-tokens"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/conventions",
+              "concepts/pagination",
+              "concepts/errors",
+              "concepts/acting-as-users",
+              "concepts/custom-fields",
+              "concepts/audiences-and-abac",
+              "concepts/file-uploads"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/publish-content",
+              "guides/manage-sites",
+              "guides/feeds-and-comments",
+              "guides/enterprise-search",
+              "guides/tasks",
+              "guides/data-export"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "User API",
+        "openapi": {
+          "source": "api-reference/openapi-user.json",
+          "directory": "api-reference/user"
+        }
+      },
+      {
+        "tab": "B2B API",
+        "openapi": {
+          "source": "api-reference/openapi-b2b.json",
+          "directory": "api-reference/b2b"
+        }
+      }
+    ]
+  },
+  "footer": {
+    "socials": {}
+  }
+}
